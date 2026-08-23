@@ -86,11 +86,25 @@ class DeploymentFileTests(SimpleTestCase):
         self.assertEqual(merged.count("location ^~ /xzqtest {"), 1)
         self.assertEqual(merged.count("location ^~ /xuzhiqin {"), 1)
         self.assertEqual(merged.count("location ^~ /cv {"), 1)
-        self.assertEqual(merged.count("location ^~ /agent/"), 2)
+        self.assertEqual(merged.count("location ^~ /agent/"), 3)
+        private_route = merged.index("location ^~ /agent/internal/")
+        general_route = merged.index("location ^~ /agent/ {")
+        self.assertLess(private_route, general_route)
+        self.assertIn("return 404;", merged[private_route:general_route])
         self.assertIn("rewrite ^/agent/$ /dashboard/ break;", merged)
         self.assertNotIn("allow 112.45.67.43/32;", merged)
         self.assertNotIn("deny all;", merged)
         self.assertIn("proxy_set_header X-Forwarded-For $remote_addr;", merged)
+
+    def test_container_uses_pinned_base_and_explicit_bash_entrypoint(self):
+        containerfile = (PROJECT_ROOT / "Containerfile").read_text()
+
+        self.assertRegex(
+            containerfile.splitlines()[0],
+            r"^FROM .+@sha256:[0-9a-f]{64}$",
+            msg=containerfile,
+        )
+        self.assertIn('ENTRYPOINT ["bash", "/app/docker/entrypoint.sh"]', containerfile)
 
     def test_site_maintenance_documents_current_boundaries(self):
         guide = (PROJECT_ROOT / "SITE_MAINTENANCE.md").read_text()
