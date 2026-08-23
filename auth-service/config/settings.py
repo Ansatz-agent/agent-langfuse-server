@@ -192,6 +192,22 @@ if HERMES_SESSION_ABSOLUTE_AGE_SECONDS < 300:
     raise ImproperlyConfigured(
         "HERMES_SESSION_ABSOLUTE_AGE_SECONDS must be at least 300"
     )
+TRACE_UPLOAD_TOKEN_TTL_SECONDS = 900
+TRACE_UPLOAD_TOKEN_SCOPE = "trace:write"
+TRACE_UPLOAD_TOKEN_AUDIENCE = "ansatz-trace-gateway"
+TRACE_GATEWAY_INTERNAL_SECRET = os.getenv("TRACE_GATEWAY_INTERNAL_SECRET", "").strip()
+if ENVIRONMENT == "production":
+    if (
+        len(TRACE_GATEWAY_INTERNAL_SECRET) < 32
+        or len(set(TRACE_GATEWAY_INTERNAL_SECRET)) < 5
+        or weak_production_secret(TRACE_GATEWAY_INTERNAL_SECRET)
+    ):
+        raise ImproperlyConfigured(
+            "TRACE_GATEWAY_INTERNAL_SECRET must be a unique, high-entropy "
+            "production secret"
+        )
+elif not TRACE_GATEWAY_INTERNAL_SECRET:
+    TRACE_GATEWAY_INTERNAL_SECRET = secrets.token_urlsafe(32)
 SECURE_SSL_REDIRECT = not DEBUG
 SECURE_HSTS_SECONDS = 0 if DEBUG else 3600
 SECURE_HSTS_INCLUDE_SUBDOMAINS = False

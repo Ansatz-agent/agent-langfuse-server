@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import auth_views, views
 
 app_name = "history"
 urlpatterns = [
@@ -42,4 +42,15 @@ urlpatterns = [
     path("history/export/", views.session_export, name="session-export"),
     path("history/import/", views.session_import, name="session-import"),
     path("history/memory/", views.memory_pool, name="memory-pool"),
+    path("api/trace-token/", auth_views.trace_token, name="trace-token"),
+    path(
+        "api/trace-token/revoke-device/",
+        auth_views.trace_token_revoke_device,
+        name="trace-token-revoke-device",
+    ),
+    path(
+        "internal/trace-token/introspect/",
+        auth_views.trace_token_introspect,
+        name="trace-token-introspect",
+    ),
 ]

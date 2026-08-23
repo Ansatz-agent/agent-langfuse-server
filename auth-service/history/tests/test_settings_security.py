@@ -6,6 +6,12 @@ import sys
 from django.test import SimpleTestCase
 
 
+VALID_DJANGO_SECRET = (
+    "A1b2C3d4E5f6G7h8J9k0L1m2N3p4Q5r6S7t8U9v0W1x2Y3z4a5B6c7D8e9F0g1H2"
+)
+VALID_TRACE_GATEWAY_SECRET = "V7tQ2xL9pR4mK8nD6sF3wH5jC1zB0aY-uE_gI-oP"
+
+
 class ProductionSettingsFailClosedTests(SimpleTestCase):
     def run_settings_import(self, code="import config.settings", **overrides):
         env = os.environ.copy()
@@ -16,9 +22,18 @@ class ProductionSettingsFailClosedTests(SimpleTestCase):
             "DJANGO_SCRIPT_NAME",
             "DJANGO_SESSION_COOKIE_NAME",
             "DJANGO_CSRF_COOKIE_NAME",
+            "TRACE_GATEWAY_INTERNAL_SECRET",
         ):
             env.pop(name, None)
-        env.update(overrides)
+        if overrides.get("DJANGO_ENV") == "production" and (
+            "TRACE_GATEWAY_INTERNAL_SECRET" not in overrides
+        ):
+            env["TRACE_GATEWAY_INTERNAL_SECRET"] = VALID_TRACE_GATEWAY_SECRET
+        for name, value in overrides.items():
+            if value is None:
+                env.pop(name, None)
+            else:
+                env[name] = value
         return subprocess.run(  # noqa: S603 - test-only code defined in this module
             [sys.executable, "-c", code],
             env=env,
@@ -61,7 +76,7 @@ class ProductionSettingsFailClosedTests(SimpleTestCase):
         result = self.run_settings_import(
             DJANGO_ENV="production",
             DJANGO_DEBUG="0",
-            DJANGO_SECRET_KEY=("A1b2C3d4E5f6G7h8J9k0L1m2N3p4Q5r6S7t8U9v0W1x2Y3z4a5B6c7D8e9F0g1H2"),
+            DJANGO_SECRET_KEY=VALID_DJANGO_SECRET,
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -100,7 +115,7 @@ print(json.dumps({
             DJANGO_ENV="production",
             DJANGO_DEBUG="0",
             DJANGO_SECRET_KEY=(
-                "A1b2C3d4E5f6G7h8J9k0L1m2N3p4Q5r6S7t8U9v0W1x2Y3z4a5B6c7D8e9F0g1H2"
+                VALID_DJANGO_SECRET
             ),
             DJANGO_SCRIPT_NAME="/agent",
         )
@@ -122,9 +137,33 @@ print(json.dumps({
                     DJANGO_ENV="production",
                     DJANGO_DEBUG="0",
                     DJANGO_SECRET_KEY=(
-                        "A1b2C3d4E5f6G7h8J9k0L1m2N3p4Q5r6S7t8U9v0W1x2Y3z4a5B6c7D8e9F0g1H2"
+                        VALID_DJANGO_SECRET
                     ),
                     DJANGO_SCRIPT_NAME=value,
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("DJANGO_SCRIPT_NAME", result.stderr)
+
+    def test_missing_trace_gateway_secret_refuses_production_startup(self):
+        result = self.run_settings_import(
+            DJANGO_ENV="production",
+            DJANGO_DEBUG="0",
+            DJANGO_SECRET_KEY=VALID_DJANGO_SECRET,
+            TRACE_GATEWAY_INTERNAL_SECRET=None,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("TRACE_GATEWAY_INTERNAL_SECRET", result.stderr)
+
+    def test_weak_trace_gateway_secrets_refuse_production_startup(self):
+        for value in ("x", "x" * 64, "change-me-" + "a1b2c3" * 10):
+            with self.subTest(value=value[:20]):
+                result = self.run_settings_import(
+                    DJANGO_ENV="production",
+                    DJANGO_DEBUG="0",
+                    DJANGO_SECRET_KEY=VALID_DJANGO_SECRET,
+                    TRACE_GATEWAY_INTERNAL_SECRET=value,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("TRACE_GATEWAY_INTERNAL_SECRET", result.stderr)
