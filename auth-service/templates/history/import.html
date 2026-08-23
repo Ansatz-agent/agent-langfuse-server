@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}导入 · Agent History{% endblock %}
+{% block content %}
+<h1>导入历史</h1>
+<p>上传经过 Hermes <code>--redact</code> 处理的 JSONL 文件。普通用户的数据会归入自己的账号；管理员可以选择归属账号。文件不会保存在服务器。</p>
+{% if form.non_field_errors %}<div class="error">{{ form.non_field_errors }}</div>{% endif %}
+<form method="post" enctype="multipart/form-data" class="upload-form">
+  {% csrf_token %}
+  <div>
+    {{ form.history_file.label_tag }}
+    {{ form.history_file }}
+    {% if form.history_file.errors %}<div class="error">{{ form.history_file.errors }}</div>{% endif %}
+  </div>
+  {% if form.owner_id %}
+    <div>
+      {{ form.owner_id.label_tag }}
+      {{ form.owner_id }}
+      {% if form.owner_id.errors %}<div class="error">{{ form.owner_id.errors }}</div>{% endif %}
+    </div>
+  {% endif %}
+  <button class="primary" type="submit">开始导入</button>
+</form>
+{% endblock %}

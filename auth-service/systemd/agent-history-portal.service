@@ -1,0 +1,16 @@
+[Unit]
+Description=Multi-user Agent History Portal
+Requires=network-online.target
+After=network-online.target podman.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/agent-history-portal
+ExecStartPre=/opt/agent-history-portal/scripts/provision-host.sh
+ExecStart=/usr/bin/podman-compose -f /opt/agent-history-portal/compose.yaml up -d
+ExecStop=/usr/bin/podman-compose -f /opt/agent-history-portal/compose.yaml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

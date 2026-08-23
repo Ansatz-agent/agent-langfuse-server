@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}概览 · Agent History{% endblock %}
+{% block content %}
+<div class="dashboard-shell">
+  {% include "history/_dashboard_sidebar.html" with active_page="overview" %}
+
+  <section class="dashboard-main">
+    <header class="dashboard-welcome">
+      <div>
+        <p class="eyebrow">Overview</p>
+        <h1>欢迎回来，{{ request.user.username }}</h1>
+        <p>在一个入口查看会话规模、工具活动、记忆记录和最近历史。</p>
+      </div>
+      <div class="dashboard-actions">
+        <a class="dashboard-button secondary" href="{% url 'history:session-import' %}">导入历史</a>
+        <a class="dashboard-button primary" href="{% url 'history:session-list' %}">查看全部历史</a>
+      </div>
+    </header>
+
+    <div class="dashboard-status-row">
+      <span><i class="status-light" aria-hidden="true"></i>数据服务正常</span>
+      <span>当前范围：{{ request.user.username }}</span>
+    </div>
+
+    <section class="dashboard-metrics" aria-label="历史数据摘要">
+      <article class="metric-card metric-violet">
+        <div class="metric-icon" aria-hidden="true">◫</div>
+        <p>会话</p>
+        <strong>{{ dashboard_stats.sessions }}</strong>
+        <span>{{ dashboard_stats.threads }} 个 subagent threads</span>
+      </article>
+      <article class="metric-card metric-blue">
+        <div class="metric-icon" aria-hidden="true">≡</div>
+        <p>消息</p>
+        <strong>{{ dashboard_stats.messages }}</strong>
+        <span>包含主会话与 thread</span>
+      </article>
+      <article class="metric-card metric-amber">
+        <div class="metric-icon" aria-hidden="true">⚙</div>
+        <p>工具调用</p>
+        <strong>{{ dashboard_stats.tool_calls }}</strong>
+        <span>完整保留，默认折叠</span>
+      </article>
+      <article class="metric-card metric-green">
+        <div class="metric-icon" aria-hidden="true">◇</div>
+        <p>记忆操作</p>
+        <strong>{{ dashboard_stats.memory_calls }}</strong>
+        <span>arguments-only 可读展示</span>
+      </article>
+    </section>
+
+    <div class="dashboard-grid">
+      <section class="dashboard-panel activity-panel" aria-labelledby="activity-title">
+        <div class="dashboard-panel-heading">
+          <div>
+            <p class="eyebrow">Last 7 days</p>
+            <h2 id="activity-title">会话活动</h2>
+          </div>
+          <span class="panel-chip">按开始日期</span>
+        </div>
+        <div class="activity-chart" role="img" aria-label="最近七天会话活动柱状图">
+          {% for point in activity_series %}
+          <div class="activity-column">
+            <div class="activity-value">{{ point.count }}</div>
+            <div class="activity-track"><span style="--bar-height: {{ point.height }}%"></span></div>
+            <time datetime="{{ point.date|date:'Y-m-d' }}">{{ point.date|date:"m/d" }}</time>
+          </div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="dashboard-panel quick-panel" aria-labelledby="quick-title">
+        <div class="dashboard-panel-heading">
+          <div>
+            <p class="eyebrow">Shortcuts</p>
+            <h2 id="quick-title">快速入口</h2>
+          </div>
+        </div>
+        <div class="quick-links">
+          <a href="{% url 'history:usage-dashboard' %}">
+            <span class="quick-icon">◒</span>
+            <span><strong>Token 用量</strong><small>输入、输出与上下文分配</small></span>
+            <b aria-hidden="true">→</b>
+          </a>
+          <a href="{% url 'history:session-list' %}">
+            <span class="quick-icon">◫</span>
+            <span><strong>浏览历史</strong><small>搜索 session 和 thread</small></span>
+            <b aria-hidden="true">→</b>
+          </a>
+          <a href="{% url 'history:memory-pool' %}">
+            <span class="quick-icon">◇</span>
+            <span><strong>维护 Memory</strong><small>编辑 MEMORY.md / USER.md</small></span>
+            <b aria-hidden="true">→</b>
+          </a>
+          <a href="{% url 'history:session-import' %}">
+            <span class="quick-icon">↥</span>
+            <span><strong>导入数据</strong><small>上传 JSON / JSONL 历史</small></span>
+            <b aria-hidden="true">→</b>
+          </a>
+          <a href="{% url 'history:history-synthesis' %}">
+            <span class="quick-icon">◎</span>
+            <span><strong>历史总结</strong><small>Critic 判断与共性方法提取 · 预留</small></span>
+            <b aria-hidden="true">→</b>
+          </a>
+          <a href="{% url 'history:api-credits' %}">
+            <span class="quick-icon">¤</span>
+            <span><strong>API 充值</strong><small>DeepSeek / Qwen 客户端额度 · 预留</small></span>
+            <b aria-hidden="true">→</b>
+          </a>
+        </div>
+      </section>
+    </div>
+
+    <section class="dashboard-panel recent-panel" aria-labelledby="recent-title">
+      <div class="dashboard-panel-heading">
+        <div>
+          <p class="eyebrow">Recent activity</p>
+          <h2 id="recent-title">最近会话</h2>
+        </div>
+        <a class="panel-link" href="{% url 'history:session-list' %}">查看全部历史 →</a>
+      </div>
+      {% if recent_sessions %}
+      <div class="recent-session-list">
+        {% for session in recent_sessions %}
+        <a class="recent-session-row" href="{% url 'history:session-detail' session.pk %}">
+          <span class="recent-session-mark" aria-hidden="true">{{ forloop.counter|stringformat:"02d" }}</span>
+          <span class="recent-session-copy">
+            <strong>{{ session.title|default:session.external_id }}</strong>
+            <small>{{ session.source|default:"unknown" }} · {{ session.model|default:"unknown model" }}</small>
+          </span>
+          <span class="recent-session-stats">
+            <span>{{ session.total_message_count }} 消息</span>
+            <span>{{ session.total_tool_call_count }} tools</span>
+          </span>
+          <time datetime="{{ session.started_at|date:'c' }}">{{ session.started_at|date:"m-d H:i"|default:"时间未知" }}</time>
+          <b aria-hidden="true">→</b>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="dashboard-empty">
+        <span aria-hidden="true">◫</span>
+        <h3>还没有可展示的会话</h3>
+        <p>导入第一份 Hermes 历史后，这里会显示最近活动。</p>
+        <a class="dashboard-button primary" href="{% url 'history:session-import' %}">开始导入</a>
+      </div>
+      {% endif %}
+    </section>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Memory pool · Agent History{% endblock %}
+{% block content %}
+<header class="session-heading">
+  <div>
+    <p class="eyebrow">Personal memory</p>
+    <h1>Memory pool</h1>
+    <p class="session-subtitle">当前账号独立维护的 Hermes MEMORY.md / USER.md 内容。</p>
+  </div>
+  <span class="tag uploader-tag">仅当前账号可见</span>
+</header>
+
+<section class="memory-pool-grid">
+  <form class="memory-editor" method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="error">{{ form.non_field_errors }}</div>{% endif %}
+    <div class="memory-editor-section">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Agent notes</p>
+          <h2>MEMORY.md</h2>
+        </div>
+        <label class="file-upload">上传本地文件 {{ form.memory_file }}</label>
+      </div>
+      {{ form.memory_markdown }}
+      {% for error in form.memory_markdown.errors %}<p class="form-error">{{ error }}</p>{% endfor %}
+    </div>
+    <div class="memory-editor-section">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">User profile</p>
+          <h2>USER.md</h2>
+        </div>
+        <label class="file-upload">上传本地文件 {{ form.user_file }}</label>
+      </div>
+      {{ form.user_markdown }}
+      {% for error in form.user_markdown.errors %}<p class="form-error">{{ error }}</p>{% endfor %}
+    </div>
+    <button class="primary-button" type="submit">保存当前账号 Memory</button>
+  </form>
+
+  <aside class="memory-preview">
+    <p class="eyebrow">Preview</p>
+    <h2>当前保存内容</h2>
+    <details open>
+      <summary>MEMORY.md</summary>
+      <div class="markdown-body">{{ memory_html }}</div>
+    </details>
+    <details>
+      <summary>USER.md</summary>
+      <div class="markdown-body">{{ user_html }}</div>
+    </details>
+    {% if pool.updated_at %}<p class="muted">最后更新：{{ pool.updated_at|date:"Y-m-d H:i:s" }}</p>{% endif %}
+  </aside>
+</section>
+{% endblock %}

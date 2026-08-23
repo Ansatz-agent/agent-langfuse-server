@@ -1,0 +1,50 @@
+{% if presented.is_memory_tool %}
+<article id="{{ presented.anchor_id }}" class="message memory-tool-event message-{{ presented.normalized_role }}">
+  <header class="message-meta">
+    <span class="role-badge role-memory">记忆 {{ presented.memory_action }}</span>
+  </header>
+  {% if presented.memory_content_html %}<div class="markdown-body">{{ presented.memory_content_html }}</div>{% endif %}
+</article>
+{% elif presented.is_control_event %}
+<details id="{{ presented.anchor_id }}" class="message control-event message-event">
+  <summary class="control-event-summary">
+    <span class="role-badge role-event">{{ presented.role_label }}</span>
+    {% if presented.message.timestamp %}<time datetime="{{ presented.message.timestamp|date:'c' }}">{{ presented.message.timestamp|date:"Y-m-d H:i:s" }}</time>{% endif %}
+  </summary>
+  <div class="message-body">
+    {% if presented.message.content %}<div class="markdown-body">{{ presented.content_html }}</div>{% endif %}
+  </div>
+</details>
+{% elif presented.is_tool %}
+<details id="{{ presented.anchor_id }}" class="message tool-event message-{{ presented.normalized_role }}">
+  <summary class="tool-event-summary">
+    <span class="role-badge role-{{ presented.normalized_role }}">{{ presented.role_label }}</span>
+    <span>{{ presented.message.tool_name|default:"工具执行" }}</span>
+    {% if presented.message.timestamp %}<time datetime="{{ presented.message.timestamp|date:'c' }}">{{ presented.message.timestamp|date:"Y-m-d H:i:s" }}</time>{% endif %}
+  </summary>
+  <div class="message-body">
+    {% if presented.message.content %}<div class="markdown-body">{{ presented.content_html }}</div>{% endif %}
+    {% if presented.message.tool_calls %}
+      <details class="tool-payload">
+        <summary>查看工具调用数据</summary>
+        <pre><code>{{ presented.display_tool_calls }}</code></pre>
+      </details>
+    {% endif %}
+  </div>
+</details>
+{% else %}
+<article id="{{ presented.anchor_id }}" class="message message-{{ presented.normalized_role }}">
+  <header class="message-meta">
+    <span class="role-badge role-{{ presented.normalized_role }}">{{ presented.role_label }}</span>
+    {% if presented.message.tool_name %}<span>{{ presented.message.tool_name }}</span>{% endif %}
+    {% if presented.message.timestamp %}<time datetime="{{ presented.message.timestamp|date:'c' }}">{{ presented.message.timestamp|date:"Y-m-d H:i:s" }}</time>{% endif %}
+  </header>
+  {% if presented.message.content %}<div class="markdown-body">{{ presented.content_html }}</div>{% endif %}
+  {% if presented.message.tool_calls %}
+    <details class="tool-payload">
+      <summary>查看工具调用数据</summary>
+      <pre><code>{{ presented.display_tool_calls }}</code></pre>
+    </details>
+  {% endif %}
+</article>
+{% endif %}

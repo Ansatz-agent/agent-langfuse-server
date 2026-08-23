@@ -1,0 +1,26 @@
+<aside class="dashboard-sidebar" aria-label="仪表盘导航">
+  <div class="dashboard-sidebar-brand">
+    <span class="dashboard-logo" aria-hidden="true">AH</span>
+    <div>
+      <strong>Agent History</strong>
+      <span>Personal workspace</span>
+    </div>
+  </div>
+  <p class="dashboard-nav-label">工作台</p>
+  <nav class="dashboard-side-nav">
+    <a{% if active_page == "overview" %} class="is-active"{% endif %} href="{% url 'history:dashboard' %}"><span aria-hidden="true">⌂</span>概览</a>
+    <a{% if active_page == "history" %} class="is-active"{% endif %} href="{% url 'history:session-list' %}"><span aria-hidden="true">◫</span>会话历史</a>
+    <a{% if active_page == "usage" %} class="is-active"{% endif %} href="{% url 'history:usage-dashboard' %}"><span aria-hidden="true">◒</span>Token 用量</a>
+    <a href="{% url 'history:memory-pool' %}"><span aria-hidden="true">◇</span>Memory Pool</a>
+    <a href="{% url 'history:session-import' %}"><span aria-hidden="true">↥</span>导入历史</a>
+    <a href="{% url 'history:history-synthesis' %}"><span aria-hidden="true">◎</span>历史总结 <small>预留</small></a>
+    <a href="{% url 'history:api-credits' %}"><span aria-hidden="true">¤</span>API 充值 <small>预留</small></a>
+  </nav>
+  <div class="dashboard-scope-card">
+    <span class="scope-dot" aria-hidden="true"></span>
+    <div>
+      <strong>Owner 隔离已启用</strong>
+      <p>{% if request.user.is_superuser %}管理员可查看全部账号；普通用户仍按 owner 隔离。{% else %}这里只显示当前账号拥有的数据。{% endif %}</p>
+    </div>
+  </div>
+</aside>

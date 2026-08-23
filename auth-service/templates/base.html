@@ -1,0 +1,36 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Agent History{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'history/app.css' %}">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="{% url 'history:dashboard' %}">Agent History</a>
+    {% if request.user.is_authenticated %}
+      <nav>
+        <a href="{% url 'history:dashboard' %}">概览</a>
+        <a href="{% url 'history:session-list' %}">历史</a>
+        <a href="{% url 'history:session-import' %}">导入</a>
+        <a href="{% url 'history:session-export' %}">导出我的历史</a>
+        <a href="{% url 'history:memory-pool' %}">Memory</a>
+        <a href="{% url 'history:history-synthesis' %}">历史总结</a>
+        <a href="{% url 'history:api-credits' %}">API 充值</a>
+        {% if request.user.is_superuser %}<a href="{% url 'admin:index' %}">账号管理</a>{% endif %}
+        <form class="inline-form" method="post" action="{% url 'logout' %}">
+          {% csrf_token %}<button type="submit">退出</button>
+        </form>
+      </nav>
+    {% endif %}
+  </header>
+  <main class="container">
+    {% if messages %}
+      {% for message in messages %}<div class="notice">{{ message }}</div>{% endfor %}
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
