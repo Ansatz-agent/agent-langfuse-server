@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent History Portal 网络架构</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px 20px; background: #020617; color: #e2e8f0; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    main { width: min(1240px, 100%); margin: 0 auto; }
+    header { margin: 0 0 22px; }
+    .heading { display: flex; align-items: center; gap: 12px; }
+    .pulse { width: 12px; height: 12px; border-radius: 50%; background: #22d3ee; box-shadow: 0 0 18px #22d3ee; animation: pulse 2s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .45; transform: scale(.8); } }
+    h1 { margin: 0; font-size: clamp(20px, 3vw, 28px); letter-spacing: -.04em; color: #f8fafc; }
+    .subtitle { margin: 8px 0 0 24px; color: #94a3b8; max-width: 940px; }
+    .diagram { overflow-x: auto; padding: 18px; border: 1px solid #1e293b; border-radius: 16px; background: rgba(15, 23, 42, .62); box-shadow: 0 26px 70px rgba(0,0,0,.25); }
+    svg { display: block; min-width: 1080px; width: 100%; height: auto; }
+    .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
+    .card { padding: 18px; border: 1px solid #1e293b; border-radius: 12px; background: rgba(15,23,42,.62); }
+    .card h2 { margin: 0 0 9px; font-size: 14px; color: #f8fafc; }
+    .card p, .card li { color: #94a3b8; font-size: 12px; }
+    .card ul { margin: 0; padding-left: 18px; }
+    .card li { margin: 5px 0; }
+    .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; }
+    .cyan { background:#22d3ee; } .green { background:#34d399; } .violet { background:#a78bfa; }
+    footer { margin: 18px 0 0; color: #64748b; text-align: center; font-size: 11px; }
+    @media (max-width: 760px) { body { padding: 18px 12px; } .cards { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="heading"><span class="pulse" aria-hidden="true"></span><h1>Agent History Portal：网络与数据架构</h1></div>
+    <p class="subtitle">当前生产拓扑（实线）与未来重制推荐方向（虚线）。门户当前通过 <strong>c2sml.cn/agent/</strong> 挂载；长期应迁移至独立 <strong>agent.c2sml.cn</strong> origin。</p>
+  </header>
+
+  <section class="diagram" aria-label="Agent History Portal 网络与数据架构图">
+    <svg viewBox="0 0 1200 860" role="img" aria-labelledby="svg-title svg-desc">
+      <title id="svg-title">Agent History Portal 当前网络架构与未来建议</title>
+      <desc id="svg-desc">浏览器通过 HTTPS 和 Nginx Proxy Manager 到私网 Django 应用；应用访问 SQLite、静态资源与备份。虚线表示独立子域、关系数据库和观测系统的推荐升级路径。</desc>
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0L0 0 0 40" fill="none" stroke="#1e293b" stroke-width=".5"/></pattern>
+        <marker id="arrow" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><path d="M0 0L9 3.5L0 7Z" fill="#64748b"/></marker>
+        <marker id="arrow-cyan" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><path d="M0 0L9 3.5L0 7Z" fill="#22d3ee"/></marker>
+        <marker id="arrow-green" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><path d="M0 0L9 3.5L0 7Z" fill="#34d399"/></marker>
+        <marker id="arrow-violet" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><path d="M0 0L9 3.5L0 7Z" fill="#a78bfa"/></marker>
+      </defs>
+      <rect width="1200" height="860" rx="12" fill="url(#grid)"/>
+
+      <!-- boundaries -->
+      <rect x="190" y="64" width="960" height="590" rx="16" fill="rgba(251,191,36,.035)" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="8 4"/>
+      <text x="208" y="88" fill="#fbbf24" font-size="12" font-weight="700">c2sml.cn host / private Podman network</text>
+      <rect x="524" y="212" width="555" height="340" rx="12" fill="rgba(251,113,133,.025)" stroke="#fb7185" stroke-width="1" stroke-dasharray="4 4"/>
+      <text x="540" y="232" fill="#fb7185" font-size="10">Agent History security boundary — no public application port</text>
+
+      <!-- connectors first -->
+      <path d="M155 320H254" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+      <text x="204" y="308" text-anchor="middle" fill="#94a3b8" font-size="10">HTTPS :443</text>
+      <path d="M422 320H552" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+      <text x="487" y="308" text-anchor="middle" fill="#94a3b8" font-size="10">/agent/ rewrite + proxy</text>
+      <path d="M704 320H815" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-green)"/>
+      <text x="760" y="308" text-anchor="middle" fill="#94a3b8" font-size="10">private :8000</text>
+      <path d="M890 380V456" fill="none" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrow-violet)"/>
+      <text x="906" y="425" fill="#94a3b8" font-size="10">SQLite + static</text>
+      <path d="M980 380L1044 456" fill="none" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrow-violet)"/>
+      <text x="1026" y="421" fill="#94a3b8" font-size="10">online backup</text>
+      <path d="M337 382V492H533" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+      <text x="441" y="483" text-anchor="middle" fill="#fb7185" font-size="9">admin over loopback/SSH tunnel only</text>
+      <path d="M891 550V686" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+      <path d="M980 550V686" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+      <text x="936" y="627" fill="#fbbf24" font-size="10">recommended migration</text>
+
+      <!-- user -->
+      <g>
+        <rect x="32" y="274" width="123" height="92" rx="8" fill="#0f172a"/>
+        <rect x="32" y="274" width="123" height="92" rx="8" fill="rgba(30,41,59,.56)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="94" y="304" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="700">浏览器</text>
+        <text x="94" y="326" text-anchor="middle" fill="#94a3b8" font-size="10">匿名登录 / 已登录用户</text>
+        <text x="94" y="346" text-anchor="middle" fill="#94a3b8" font-size="10">HTTPS only</text>
+      </g>
+
+      <!-- NPM -->
+      <g>
+        <rect x="254" y="255" width="168" height="130" rx="9" fill="#0f172a"/>
+        <rect x="254" y="255" width="168" height="130" rx="9" fill="rgba(120,53,15,.30)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="338" y="284" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="700">Nginx Proxy Manager</text>
+        <text x="338" y="307" text-anchor="middle" fill="#94a3b8" font-size="10">TLS termination / routing</text>
+        <text x="338" y="327" text-anchor="middle" fill="#94a3b8" font-size="10">c2sml.cn + /agent/</text>
+        <text x="338" y="350" text-anchor="middle" fill="#fbbf24" font-size="9">80 / 443 public · 81 loopback</text>
+        <text x="338" y="369" text-anchor="middle" fill="#fbbf24" font-size="9">preserve legacy site routes</text>
+      </g>
+
+      <!-- external legacy -->
+      <g>
+        <rect x="248" y="456" width="180" height="82" rx="8" fill="#0f172a"/>
+        <rect x="248" y="456" width="180" height="82" rx="8" fill="rgba(30,41,59,.50)" stroke="#94a3b8" stroke-width="1.2"/>
+        <text x="338" y="483" text-anchor="middle" fill="#f8fafc" font-size="12" font-weight="700">既有主站路径</text>
+        <text x="338" y="505" text-anchor="middle" fill="#94a3b8" font-size="9">/cv /xzqtest /xuzhiqin /bbs</text>
+        <text x="338" y="522" text-anchor="middle" fill="#94a3b8" font-size="9">门户重制不得回归破坏</text>
+      </g>
+
+      <!-- edge agent location -->
+      <g>
+        <rect x="552" y="265" width="152" height="110" rx="8" fill="#0f172a"/>
+        <rect x="552" y="265" width="152" height="110" rx="8" fill="rgba(136,19,55,.34)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="628" y="294" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="700">/agent/ edge policy</text>
+        <text x="628" y="316" text-anchor="middle" fill="#94a3b8" font-size="9">Host / X-Forwarded-* / 26 MiB</text>
+        <text x="628" y="336" text-anchor="middle" fill="#94a3b8" font-size="9">public login; /healthz = 404</text>
+        <text x="628" y="355" text-anchor="middle" fill="#fb7185" font-size="9">CSP + cookie prefix boundary</text>
+      </g>
+
+      <!-- app -->
+      <g>
+        <rect x="815" y="255" width="165" height="125" rx="8" fill="#0f172a"/>
+        <rect x="815" y="255" width="165" height="125" rx="8" fill="rgba(6,78,59,.42)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="897" y="284" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="700">agent-history-web</text>
+        <text x="897" y="306" text-anchor="middle" fill="#94a3b8" font-size="10">Django + Gunicorn</text>
+        <text x="897" y="326" text-anchor="middle" fill="#94a3b8" font-size="9">auth · owner scope · import/export</text>
+        <text x="897" y="344" text-anchor="middle" fill="#94a3b8" font-size="9">turn presentation · usage SVG</text>
+        <text x="897" y="363" text-anchor="middle" fill="#34d399" font-size="9">non-root · no host port</text>
+      </g>
+
+      <!-- db -->
+      <g>
+        <rect x="795" y="456" width="190" height="94" rx="8" fill="#0f172a"/>
+        <rect x="795" y="456" width="190" height="94" rx="8" fill="rgba(76,29,149,.42)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="890" y="483" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="700">/var/lib/agent-history</text>
+        <text x="890" y="505" text-anchor="middle" fill="#94a3b8" font-size="10">SQLite + staticfiles</text>
+        <text x="890" y="524" text-anchor="middle" fill="#94a3b8" font-size="9">sessions · messages · imports · memory</text>
+        <text x="890" y="541" text-anchor="middle" fill="#a78bfa" font-size="9">root/thread + typed token counters</text>
+      </g>
+
+      <!-- backups -->
+      <g>
+        <rect x="1020" y="456" width="116" height="94" rx="8" fill="#0f172a"/>
+        <rect x="1020" y="456" width="116" height="94" rx="8" fill="rgba(76,29,149,.42)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="1078" y="484" text-anchor="middle" fill="#f8fafc" font-size="12" font-weight="700">Backups</text>
+        <text x="1078" y="505" text-anchor="middle" fill="#94a3b8" font-size="9">root-only</text>
+        <text x="1078" y="522" text-anchor="middle" fill="#94a3b8" font-size="9">SQLite online copy</text>
+        <text x="1078" y="540" text-anchor="middle" fill="#a78bfa" font-size="9">integrity + restore</text>
+      </g>
+
+      <!-- future -->
+      <g>
+        <rect x="677" y="686" width="214" height="98" rx="8" fill="#0f172a"/>
+        <rect x="677" y="686" width="214" height="98" rx="8" fill="rgba(120,53,15,.18)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="784" y="716" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="700">目标：agent.c2sml.cn</text>
+        <text x="784" y="738" text-anchor="middle" fill="#94a3b8" font-size="10">独立 TLS / Cookie / CSP / origin</text>
+        <text x="784" y="759" text-anchor="middle" fill="#fbbf24" font-size="9">减少路径重写与共享同源风险</text>
+      </g>
+      <g>
+        <rect x="930" y="686" width="206" height="98" rx="8" fill="#0f172a"/>
+        <rect x="930" y="686" width="206" height="98" rx="8" fill="rgba(120,53,15,.18)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="1033" y="716" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="700">目标：PostgreSQL + observability</text>
+        <text x="1033" y="738" text-anchor="middle" fill="#94a3b8" font-size="10">并发、PITR、审计、指标与告警</text>
+        <text x="1033" y="759" text-anchor="middle" fill="#fbbf24" font-size="9">保留 owner / import / export 语义</text>
+      </g>
+
+      <!-- legend -->
+      <g transform="translate(210 105)">
+        <text x="0" y="0" fill="#f8fafc" font-size="11" font-weight="700">图例</text>
+        <rect x="0" y="13" width="14" height="10" rx="2" fill="rgba(30,41,59,.56)" stroke="#94a3b8"/><text x="21" y="22" fill="#94a3b8" font-size="9">外部/既有系统</text>
+        <rect x="0" y="30" width="14" height="10" rx="2" fill="rgba(120,53,15,.30)" stroke="#fbbf24"/><text x="21" y="39" fill="#94a3b8" font-size="9">边缘/基础设施</text>
+        <rect x="0" y="47" width="14" height="10" rx="2" fill="rgba(6,78,59,.42)" stroke="#34d399"/><text x="21" y="56" fill="#94a3b8" font-size="9">应用服务</text>
+        <rect x="0" y="64" width="14" height="10" rx="2" fill="rgba(76,29,149,.42)" stroke="#a78bfa"/><text x="21" y="73" fill="#94a3b8" font-size="9">数据/备份</text>
+        <rect x="0" y="81" width="14" height="10" rx="2" fill="rgba(136,19,55,.34)" stroke="#fb7185"/><text x="21" y="90" fill="#94a3b8" font-size="9">安全边界</text>
+        <line x1="0" y1="106" x2="14" y2="106" stroke="#fbbf24" stroke-dasharray="4 3"/><text x="21" y="110" fill="#94a3b8" font-size="9">未来建议</text>
+      </g>
+    </svg>
+  </section>
+
+  <section class="cards">
+    <article class="card"><h2><span class="dot cyan"></span>关键请求流</h2><ul><li>浏览器以 HTTPS 进入反代。</li><li>NPM 仅为 `/agent/` 剥离前缀并转发可信头。</li><li>应用只在私网 `agent-history-web:8000` 服务。</li><li>Owner scope 在应用数据访问层而非模板层执行。</li></ul></article>
+    <article class="card"><h2><span class="dot green"></span>关键数据流</h2><ul><li>可信本机 JSON/JSONL → 校验 → 二次脱敏 → 原子导入。</li><li>Session 与 Message 保留 raw metadata 和 typed usage。</li><li>Export 以 root JSONL 行输出，合法 threads 嵌套。</li><li>Context allocation 是派生估算，精确 tokens 是 session 累计。</li></ul></article>
+    <article class="card"><h2><span class="dot violet"></span>重制硬约束</h2><ul><li>应用端口、数据库端口、健康细节不得公网暴露。</li><li>跨 Owner child 不得参与任何聚合或页面。</li><li>备份必须一致性校验并实际恢复演练。</li><li>迁移子域和替换数据库时不得破坏主站既有路由。</li></ul></article>
+  </section>
+  <footer>配套主文档：REBUILD_ARCHITECTURE_AND_REQUIREMENTS.md · 图中不含凭据、秘密或聊天正文</footer>
+</main>
+</body>
+</html>

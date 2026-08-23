@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}历史方法总结 · Agent History{% endblock %}
+{% block content %}
+<header class="reserved-feature-heading">
+  <div>
+    <p class="eyebrow">Reserved feature</p>
+    <h1>历史方法总结</h1>
+    <p>从历史对话中提炼科研与事务工作的共性流程、方法和可复用证据。</p>
+  </div>
+  <span class="reserved-badge">尚未开放</span>
+</header>
+
+<section class="reserved-feature-grid" aria-label="计划中的处理流程">
+  <article class="reserved-feature-card">
+    <span>01</span>
+    <h2>候选历史选择</h2>
+    <p>只在当前账号可见范围内选择候选会话，不跨 owner 混合数据。</p>
+  </article>
+  <article class="reserved-feature-card">
+    <span>02</span>
+    <h2>Critic model 判断</h2>
+    <p>由 critic model 判断对话是否适合纳入流程和方法提取，并保留理由。</p>
+  </article>
+  <article class="reserved-feature-card">
+    <span>03</span>
+    <h2>共性流程与方法</h2>
+    <p>后续模型仅从通过判断的证据中提取共性，并在人工确认前保持为草稿。</p>
+  </article>
+</section>
+
+<section class="reserved-feature-notice">
+  <div>
+    <p class="eyebrow">Current state</p>
+    <h2>当前只预留入口和接口契约</h2>
+    <p>尚未调用任何模型，也不会创建总结任务、修改历史或发布提取结果。</p>
+  </div>
+  <form method="post" action="{% url 'history:history-synthesis-runs' %}">
+    {% csrf_token %}
+    <button type="submit" disabled aria-disabled="true">创建总结任务（尚未开放）</button>
+  </form>
+</section>
+{% endblock %}

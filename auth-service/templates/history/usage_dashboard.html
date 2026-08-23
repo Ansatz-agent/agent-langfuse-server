@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Token 用量 · Agent History{% endblock %}
+{% block content %}
+<div class="dashboard-shell usage-dashboard-shell">
+  {% include "history/_dashboard_sidebar.html" with active_page="usage" %}
+  <section class="dashboard-main">
+    <header class="dashboard-welcome">
+      <div>
+        <p class="eyebrow">Usage analytics</p>
+        <h1>Token 用量</h1>
+        <p>按当前 owner 范围统计每条历史记录及其 subagent threads 的模型用量。</p>
+      </div>
+    </header>
+
+    <div class="dashboard-status-row">
+      <span><i class="status-light" aria-hidden="true"></i>范围：{{ request.user.username }} 的全部已导入历史</span>
+      <span>最近导入：{{ usage_stats.latest_imported_at|date:"Y-m-d H:i"|default:"暂无" }}</span>
+    </div>
+
+    <section class="dashboard-metrics" aria-label="Token 用量摘要">
+      <article class="metric-card metric-violet"><p>Input tokens</p><strong>{{ usage_stats.input_tokens|intcomma:False }}</strong><span>模型输入累计</span></article>
+      <article class="metric-card metric-green"><p>Output tokens</p><strong>{{ usage_stats.output_tokens|intcomma:False }}</strong><span>模型输出累计</span></article>
+      <article class="metric-card metric-blue"><p>Cache read</p><strong>{{ usage_stats.cache_read_tokens|intcomma:False }}</strong><span>提示缓存读取</span></article>
+      <article class="metric-card metric-amber"><p>Reasoning</p><strong>{{ usage_stats.reasoning_tokens|intcomma:False }}</strong><span>Provider 报告累计</span></article>
+    </section>
+
+    <section class="dashboard-panel usage-sessions-panel" aria-labelledby="usage-sessions-title">
+      <div class="dashboard-panel-heading">
+        <div><p class="eyebrow">Session usage</p><h2 id="usage-sessions-title">历史记录</h2></div>
+        <span class="panel-chip">{{ usage_stats.sessions }} 个主会话 · {{ usage_stats.threads }} 个 thread</span>
+      </div>
+      <div class="usage-session-list">
+      {% for session in sessions %}
+        <a class="usage-session-row" href="{% url 'history:session-detail' session.pk %}#usage">
+          <span class="usage-session-copy"><strong>{{ session.title|default:session.external_id }}</strong><small>{{ session.model|default:"unknown model" }} · I {{ session.total_input_tokens|intcomma:False }} · O {{ session.total_output_tokens|intcomma:False }}</small></span>
+          <span><b>{{ session.total_input_tokens|intcomma:False }}</b><small>Input</small></span>
+          <span><b>{{ session.total_output_tokens|intcomma:False }}</b><small>Output</small></span>
+          <span><b>{{ session.total_reasoning_tokens|intcomma:False }}</b><small>Reasoning</small></span>
+          <i aria-hidden="true">→</i>
+        </a>
+      {% empty %}
+        <div class="dashboard-empty"><h3>还没有用量数据</h3><p>导入包含 Hermes token 字段的历史后，这里会显示用量。</p></div>
+      {% endfor %}
+      </div>
+      {% if page_obj.paginator.num_pages > 1 %}
+      <nav class="pagination history-dashboard-pagination" aria-label="Token 用量分页">
+        {% if page_obj.has_previous %}<a class="dashboard-button secondary" href="?page={{ page_obj.previous_page_number }}">← 上一页</a>{% endif %}
+        <span>第 {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} 页</span>
+        {% if page_obj.has_next %}<a class="dashboard-button secondary" href="?page={{ page_obj.next_page_number }}">下一页 →</a>{% endif %}
+      </nav>
+      {% endif %}
+    </section>
+  </section>
+</div>
+{% endblock %}

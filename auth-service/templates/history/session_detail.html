@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ session.title|default:session.external_id }} · Agent History{% endblock %}
+{% block content %}
+<a class="back-link" href="{% url 'history:session-list' %}">← 返回历史列表</a>
+<header class="session-heading">
+  <div>
+    <p class="eyebrow">对话历史</p>
+    <h1>{{ session.title|default:session.external_id }}</h1>
+    <p class="session-subtitle">按用户请求组织为 turn，正文由服务端安全渲染为 Markdown。</p>
+  </div>
+  <span class="tag uploader-tag">上传者：{{ session.uploader.username|default:"未知" }}</span>
+</header>
+
+<dl class="session-metadata">
+  <div><dt>来源</dt><dd>{{ session.source|default:"unknown" }}</dd></div>
+  <div><dt>模型</dt><dd>{{ session.model|default:"unknown" }}</dd></div>
+  <div><dt>开始时间</dt><dd>{{ session.started_at|date:"Y-m-d H:i:s"|default:"未知" }}</dd></div>
+  <div><dt>消息数</dt><dd>{{ session.message_count }}</dd></div>
+</dl>
+
+{% include "history/_usage_overview.html" %}
+
+<section class="history-section" aria-labelledby="main-conversation-title">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">Main session</p>
+      <h2 id="main-conversation-title">主对话</h2>
+    </div>
+    <span class="muted">完整历史 · 未压缩</span>
+  </div>
+  {% include "history/_conversation.html" with presentation=history_presentation %}
+</section>
+
+{% if session.visible_subagent_threads %}
+<section class="subagent-threads" aria-labelledby="subagent-threads-title">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">Delegated work</p>
+      <h2 id="subagent-threads-title">Subagent threads</h2>
+    </div>
+    <span class="muted">{{ session.visible_subagent_threads|length }} 个 thread</span>
+  </div>
+  {% for thread in session.visible_subagent_threads %}
+    <article class="subagent-thread" id="thread-{{ thread.pk }}">
+      <header class="thread-heading">
+        <div>
+          <p class="eyebrow">Subagent thread {{ forloop.counter }}</p>
+          <h3>{{ thread.title|default:thread.external_id }}</h3>
+          <p class="muted">{{ thread.source|default:"unknown" }} · {{ thread.model|default:"unknown" }} · {{ thread.started_at|date:"Y-m-d H:i:s"|default:"时间未知" }}</p>
+        </div>
+        <div class="thread-usage-tags">
+          <span class="tag">Input {{ thread.input_tokens|intcomma:False }}</span>
+          <span class="tag">Output {{ thread.output_tokens|intcomma:False }}</span>
+          <span class="tag uploader-tag">上传者：{{ thread.uploader.username|default:"未知" }}</span>
+        </div>
+      </header>
+      {% include "history/_conversation.html" with presentation=thread.history_presentation %}
+    </article>
+  {% endfor %}
+</section>
+{% endif %}
+{% endblock %}

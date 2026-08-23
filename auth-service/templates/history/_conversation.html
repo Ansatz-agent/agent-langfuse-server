@@ -1,0 +1,48 @@
+{% for presented in presentation.preamble_memory_tools %}
+  {% include "history/_presented_message.html" with presented=presented %}
+{% endfor %}
+
+{% if presentation.preamble %}
+<details class="context-block">
+  <summary>会话上下文 · {{ presentation.preamble|length }} 条</summary>
+  <div class="context-messages">
+    {% for presented in presentation.preamble %}
+      {% include "history/_presented_message.html" with presented=presented %}
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+
+{% if presentation.turns %}
+<div class="conversation-turns">
+  {% for turn in presentation.turns %}
+  <section class="conversation-turn" aria-labelledby="turn-{{ turn.number }}-title">
+    <header class="turn-header">
+      <h3 id="turn-{{ turn.number }}-title">Turn {{ turn.number }}</h3>
+      {% if turn.is_complete %}
+        <span class="turn-status turn-complete">完整</span>
+      {% else %}
+        <span class="turn-status turn-incomplete">未完成</span>
+      {% endif %}
+    </header>
+    {% if turn.context_messages %}
+    <details class="context-block turn-context">
+      <summary>会话上下文 · {{ turn.context_messages|length }} 条</summary>
+      <div class="context-messages">
+        {% for presented in turn.context_messages %}
+          {% include "history/_presented_message.html" with presented=presented %}
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+    <div class="turn-messages">
+      {% for presented in turn.messages %}
+        {% include "history/_presented_message.html" with presented=presented %}
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% elif not presentation.preamble and not presentation.preamble_memory_tools %}
+<p class="empty">此会话没有消息。</p>
+{% endif %}

@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}会话历史 · Agent History{% endblock %}
+{% block content %}
+<div class="dashboard-shell history-dashboard-shell">
+  {% include "history/_dashboard_sidebar.html" with active_page="history" %}
+
+  <section class="dashboard-main">
+    <header class="dashboard-welcome history-dashboard-welcome">
+      <div>
+        <p class="eyebrow">History archive</p>
+        <h1>会话历史</h1>
+        <p>{% if request.user.is_superuser %}浏览全部用户的主会话与 subagent threads。{% else %}搜索和浏览归属于 {{ request.user.username }} 的完整对话。{% endif %}</p>
+      </div>
+      <div class="dashboard-actions">
+        <a class="dashboard-button secondary" href="{% url 'history:session-export' %}">导出可见历史</a>
+        <a class="dashboard-button primary" href="{% url 'history:session-import' %}">导入历史</a>
+      </div>
+    </header>
+
+    <div class="dashboard-status-row">
+      <span><i class="status-light" aria-hidden="true"></i>{{ page_obj.paginator.count }} 个主会话</span>
+      <span>{% if query %}搜索：{{ query }}{% else %}当前范围：{{ request.user.username }}{% endif %}</span>
+    </div>
+
+    <div class="history-dashboard-grid">
+      <aside class="dashboard-panel history-filter-panel" aria-label="上传者筛选">
+        <div class="dashboard-panel-heading">
+          <div>
+            <p class="eyebrow">Filters</p>
+            <h2>上传者</h2>
+          </div>
+          <span class="panel-chip">{{ uploader_options|length }} 个来源</span>
+        </div>
+        <form method="get" class="uploader-filter history-uploader-filter">
+          {% if query %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
+          <div class="filter-options">
+          {% for uploader in uploader_options %}
+            <label>
+              <input type="checkbox" name="uploader" value="{{ uploader.pk }}"{% if uploader.pk in selected_uploader_ids %} checked{% endif %}>
+              <span class="history-filter-user"><i aria-hidden="true">{{ uploader.username|first|upper }}</i>{{ uploader.username }}</span>
+            </label>
+          {% empty %}
+            <div class="history-filter-empty">暂无上传者</div>
+          {% endfor %}
+          </div>
+          <div class="filter-actions history-filter-actions">
+            <button type="submit" class="dashboard-button primary">应用筛选</button>
+            <a class="dashboard-button secondary" href="{% url 'history:session-list' %}{% if query %}?q={{ query|urlencode }}{% endif %}">清除</a>
+          </div>
+        </form>
+      </aside>
+
+      <section class="dashboard-panel history-results-panel" aria-label="会话列表">
+        <div class="dashboard-panel-heading history-results-heading">
+          <div>
+            <p class="eyebrow">All sessions</p>
+            <h2>全部历史</h2>
+          </div>
+          <span class="panel-chip">第 {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} 页</span>
+        </div>
+
+        <form class="history-dashboard-search" method="get" role="search">
+          <label class="sr-only" for="q">搜索</label>
+          <span aria-hidden="true">⌕</span>
+          <input id="q" name="q" value="{{ query }}" placeholder="搜索标题、消息、模型或 thread…">
+          {% for uploader_id in selected_uploader_ids %}<input type="hidden" name="uploader" value="{{ uploader_id }}">{% endfor %}
+          {% if query %}<a href="{% url 'history:session-list' %}">清除搜索</a>{% endif %}
+          <button class="dashboard-button primary" type="submit">搜索</button>
+        </form>
+
+        {% if sessions %}
+        <div class="history-session-list">
+          {% for session in sessions %}
+          <a class="history-session-row" href="{% url 'history:session-detail' session.pk %}">
+            <span class="history-session-mark" aria-hidden="true">{{ forloop.counter|stringformat:"02d" }}</span>
+            <span class="history-session-copy">
+              <strong title="{{ session.title|default:session.external_id }}">{{ session.title|default:session.external_id }}</strong>
+              <small>{{ session.source|default:"unknown" }} · {{ session.model|default:"model unknown" }} · I {{ session.total_input_tokens|intcomma:False }} · O {{ session.total_output_tokens|intcomma:False }}</small>
+            </span>
+            <span class="history-session-tags">
+              <span>上传者：{{ session.uploader.username|default:"未知" }}</span>
+              {% if session.subagent_thread_count %}<span>{{ session.subagent_thread_count }} 个 subagent thread</span>{% endif %}
+            </span>
+            <span class="history-session-stats">
+              <span>Input {{ session.total_input_tokens|intcomma:False }}</span>
+              <span>Output {{ session.total_output_tokens|intcomma:False }}</span>
+              <span>{{ session.total_message_count }} 条消息</span>
+              <span>{{ session.total_tool_call_count }} 次工具调用</span>
+            </span>
+            <time datetime="{{ session.started_at|date:'c' }}">{{ session.started_at|date:"Y-m-d H:i"|default:"时间未知" }}</time>
+            <b class="history-session-arrow" aria-hidden="true">→</b>
+          </a>
+          {% endfor %}
+        </div>
+        <nav class="pagination history-dashboard-pagination" aria-label="分页">
+          {% if page_obj.has_previous %}<a class="dashboard-button secondary" href="?{% if pagination_query %}{{ pagination_query }}&amp;{% endif %}page={{ page_obj.previous_page_number }}">← 上一页</a>{% endif %}
+          <span>第 {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} 页</span>
+          {% if page_obj.has_next %}<a class="dashboard-button secondary" href="?{% if pagination_query %}{{ pagination_query }}&amp;{% endif %}page={{ page_obj.next_page_number }}">下一页 →</a>{% endif %}
+        </nav>
+        {% else %}
+        <div class="dashboard-empty history-dashboard-empty">
+          <span aria-hidden="true">⌕</span>
+          <h3>没有找到可见历史</h3>
+          <p>{% if query or selected_uploader_ids %}尝试清除搜索或上传者筛选。{% else %}上传第一份 Hermes JSONL 后，会话会显示在这里。{% endif %}</p>
+          {% if query or selected_uploader_ids %}
+          <a class="dashboard-button secondary" href="{% url 'history:session-list' %}">清除全部条件</a>
+          {% else %}
+          <a class="dashboard-button primary" href="{% url 'history:session-import' %}">导入历史</a>
+          {% endif %}
+        </div>
+        {% endif %}
+      </section>
+    </div>
+  </section>
+</div>
+{% endblock %}

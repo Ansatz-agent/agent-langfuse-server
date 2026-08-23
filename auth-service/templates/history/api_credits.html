@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}API 额度充值 · Agent History{% endblock %}
+{% block content %}
+<header class="reserved-feature-heading">
+  <div>
+    <p class="eyebrow">Reserved feature</p>
+    <h1>API 额度充值</h1>
+    <p>面向普通用户的一站式模型额度购买和客户端安全激活入口。</p>
+  </div>
+  <span class="reserved-badge">尚未开放</span>
+</header>
+
+<section class="reserved-feature-grid provider-grid" aria-label="计划支持的模型供应商">
+  <article class="reserved-feature-card provider-card">
+    <span>DS</span>
+    <h2>DeepSeek</h2>
+    <p>计划提供明确面额、订单状态和到账结果，不要求用户手工复制 API key。</p>
+  </article>
+  <article class="reserved-feature-card provider-card">
+    <span>QW</span>
+    <h2>Qwen</h2>
+    <p>计划提供同样的傻瓜式购买流程，并与供应商账户和额度状态解耦展示。</p>
+  </article>
+  <article class="reserved-feature-card provider-card">
+    <span>APP</span>
+    <h2>客户端安全激活</h2>
+    <p>客户端只接收一次性激活结果；具体凭据不在网页、日志或普通配置中展示。</p>
+  </article>
+</section>
+
+<section class="reserved-feature-notice">
+  <div>
+    <p class="eyebrow">Current state</p>
+    <h2>当前不接受订单或付款信息</h2>
+    <p>尚未连接支付、DeepSeek、Qwen 或客户端密钥下发服务，也不会收集 API key。</p>
+  </div>
+  <form method="post" action="{% url 'history:api-credit-orders' %}">
+    {% csrf_token %}
+    <button type="submit" disabled aria-disabled="true">购买额度（尚未开放）</button>
+  </form>
+</section>
+{% endblock %}

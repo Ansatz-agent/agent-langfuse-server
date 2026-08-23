@@ -1,0 +1,49 @@
+{% load humanize %}
+<section id="usage" class="usage-overview" aria-labelledby="usage-overview-title">
+  <div class="usage-overview-heading">
+    <div>
+      <p class="eyebrow">Usage analysis</p>
+      <h2 id="usage-overview-title">Token 与上下文分配</h2>
+    </div>
+    <span class="panel-chip">{{ session.visible_subagent_threads|length }} 个 direct thread</span>
+  </div>
+
+  <div class="usage-token-grid" aria-label="该历史记录的 Token 用量">
+    <article class="usage-token-card usage-token-input">
+      <span>Input tokens</span><strong>{{ session_usage.input_tokens|intcomma:False }}</strong><small>模型输入累计</small>
+    </article>
+    <article class="usage-token-card usage-token-output">
+      <span>Output tokens</span><strong>{{ session_usage.output_tokens|intcomma:False }}</strong><small>模型输出累计</small>
+    </article>
+    <article class="usage-token-card usage-token-cache">
+      <span>Cache read tokens</span><strong>{{ session_usage.cache_read_tokens|intcomma:False }}</strong><small>写入 {{ session_usage.cache_write_tokens|intcomma:False }}</small>
+    </article>
+    <article class="usage-token-card usage-token-reasoning">
+      <span>Reasoning tokens</span><strong>{{ session_usage.reasoning_tokens|intcomma:False }}</strong><small>Provider 报告累计</small>
+    </article>
+  </div>
+
+  <div class="context-allocation-card">
+    <div class="context-allocation-heading">
+      <div>
+        <span>Context allocation</span>
+        <strong>{{ context_allocation.total_tokens|intcomma:False }} estimated tokens</strong>
+      </div>
+      <small>当前保存内容</small>
+    </div>
+    {% if context_allocation.segments %}
+    <svg class="context-allocation-bar" viewBox="0 0 100 4" preserveAspectRatio="none" role="img" aria-label="上下文估算分配：{% for segment in context_allocation.segments %}{{ segment.label }} {{ segment.percent }}%{% if not forloop.last %}，{% endif %}{% endfor %}">
+      {% for segment in context_allocation.segments %}<rect class="context-segment context-{{ segment.key }}" x="{{ segment.start_percent }}" y="0" width="{{ segment.percent }}" height="4"><title>{{ segment.label }} · {{ segment.tokens|intcomma:False }} tokens · {{ segment.percent }}%</title></rect>{% endfor %}
+    </svg>
+    <div class="context-allocation-legend">
+      {% for segment in context_allocation.segments %}
+      <div><i class="context-dot context-{{ segment.key }}"></i><span>{{ segment.label }}</span><strong>{{ segment.tokens|intcomma:False }}</strong><small>{{ segment.percent }}%</small></div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="usage-empty">当前记录没有可估算的上下文内容。</p>
+    {% endif %}
+  </div>
+
+  <p class="usage-method-note"><strong>计量口径：</strong>上方精确计数汇总当前主会话及其可见的直接 subagent threads；Input / Output / Cache / Reasoning 来自 Hermes 导出的会话累计字段。Context allocation 使用同一范围内当前保存消息的字符启发式估算，并按推理、代码、对话、工具、系统/控制内容分类。它用于比较内容构成，不等同于逐次 API 计费 input，也不代表模型最大 context window。</p>
+</section>
