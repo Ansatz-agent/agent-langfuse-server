@@ -2,8 +2,20 @@ from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import Group
+from django.utils import timezone
 
-from .models import HistoryMessage, HistorySession, ImportBatch
+from .client_sessions import (
+    account_identity_for_user,
+    revoke_account_sessions,
+    revoke_client_session,
+)
+from .models import (
+    AccountIdentity,
+    ClientSession,
+    HistoryMessage,
+    HistorySession,
+    ImportBatch,
+)
 
 
 class SuperuserAdminSite(admin.AdminSite):
@@ -27,6 +39,43 @@ class ReadOnlyAdminMixin:
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.action(description="Revoke selected native Sessions")
+def revoke_sessions(modeladmin, request, queryset):
+    for session in queryset.select_related("account"):
+        revoke_client_session(
+            session=session,
+            reason=ClientSession.RevocationReason.SESSION_REVOKED,
+        )
+
+
+@admin.action(description="Disable selected accounts")
+def disable_accounts(modeladmin, request, queryset):
+    for user in queryset:
+        user.is_active = False
+        user.save(update_fields=["is_active"])
+        revoke_account_sessions(
+            account=account_identity_for_user(user),
+            reason=ClientSession.RevocationReason.ACCOUNT_DISABLED,
+        )
+
+
+@admin.action(description="Revoke selected accounts")
+def revoke_accounts(modeladmin, request, queryset):
+    for account in queryset:
+        AccountIdentity.objects.filter(
+            pk=account.pk,
+            state=AccountIdentity.State.ACTIVE,
+        ).update(
+            state=AccountIdentity.State.REVOKED,
+            revoked_at=timezone.now(),
+            revocation_reason=ClientSession.RevocationReason.ACCOUNT_REVOKED,
+        )
+        revoke_account_sessions(
+            account=account,
+            reason=ClientSession.RevocationReason.ACCOUNT_REVOKED,
+        )
 
 
 @admin.register(HistorySession, site=admin_site)
@@ -78,5 +127,43 @@ class ImportBatchAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     readonly_fields = [field.name for field in ImportBatch._meta.fields]
 
 
-admin_site.register(get_user_model(), UserAdmin)
+@admin.register(ClientSession, site=admin_site)
+class ClientSessionAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
+    actions = (revoke_sessions,)
+    list_display = (
+        "session_id",
+        "account",
+        "installation_id",
+        "client_version",
+        "created_at",
+        "last_seen_at",
+        "revoked_at",
+        "revocation_reason",
+    )
+    list_filter = ("revocation_reason",)
+    search_fields = ("session_id", "account__account_id", "account__user__username")
+    readonly_fields = [field.name for field in ClientSession._meta.fields]
+
+
+@admin.register(AccountIdentity, site=admin_site)
+class AccountIdentityAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
+    actions = (revoke_accounts,)
+    list_display = (
+        "account_id",
+        "user",
+        "state",
+        "revoked_at",
+        "revocation_reason",
+        "created_at",
+    )
+    list_filter = ("state",)
+    search_fields = ("account_id", "user__username")
+    readonly_fields = [field.name for field in AccountIdentity._meta.fields]
+
+
+class HermesUserAdmin(UserAdmin):
+    actions = (disable_accounts,)
+
+
+admin_site.register(get_user_model(), HermesUserAdmin)
 admin_site.register(Group)
