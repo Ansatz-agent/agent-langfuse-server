@@ -1,6 +1,7 @@
 import hashlib
 import uuid
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -86,6 +87,17 @@ class ClientSessionServiceTests(TestCase):
                     (None, "invalid_session_credential", False),
                 )
 
+    def test_well_formed_unknown_token_is_not_explicit_revocation(self):
+        resolution = resolve_client_session(
+            token="u" * 43,
+            installation_id=INSTALLATION_ID,
+        )
+
+        self.assertEqual(
+            (resolution.record, resolution.code, resolution.explicit_revocation),
+            (None, "invalid_session_credential", False),
+        )
+
     def test_inactive_user_is_explicitly_account_disabled(self):
         issued = issue_client_session(
             user=self.user,
@@ -148,6 +160,69 @@ class ClientSessionServiceTests(TestCase):
         self.assertEqual(
             (resolution.record, resolution.code, resolution.explicit_revocation),
             (issued.record, "session_revoked", True),
+        )
+
+    def test_terminal_state_precedence_is_user_then_account_then_session(self):
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+        revoke_client_session(
+            session=issued.record,
+            reason=ClientSession.RevocationReason.SIGNED_OUT,
+        )
+        account = issued.record.account
+        account.state = AccountIdentity.State.REVOKED
+        account.revoked_at = timezone.now()
+        account.revocation_reason = ClientSession.RevocationReason.ACCOUNT_REVOKED
+        account.save(update_fields=["state", "revoked_at", "revocation_reason"])
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+
+        disabled = resolve_client_session(
+            token=issued.access_token,
+            installation_id=INSTALLATION_ID,
+        )
+        self.assertEqual(disabled.code, "account_disabled")
+
+        self.user.is_active = True
+        self.user.save(update_fields=["is_active"])
+        account_revoked = resolve_client_session(
+            token=issued.access_token,
+            installation_id=INSTALLATION_ID,
+        )
+        self.assertEqual(account_revoked.code, "account_revoked")
+
+        account.state = AccountIdentity.State.ACTIVE
+        account.revoked_at = None
+        account.revocation_reason = ""
+        account.save(update_fields=["state", "revoked_at", "revocation_reason"])
+        session_revoked = resolve_client_session(
+            token=issued.access_token,
+            installation_id=INSTALLATION_ID,
+        )
+        self.assertEqual(session_revoked.code, "session_revoked")
+
+    def test_invalid_persisted_reason_does_not_escape_external_wire_vocabulary(self):
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+        ClientSession.objects.filter(pk=issued.record.pk).update(
+            revoked_at=timezone.now(),
+            revocation_reason="unexpected_internal_reason",
+        )
+
+        resolution = resolve_client_session(
+            token=issued.access_token,
+            installation_id=INSTALLATION_ID,
+        )
+
+        self.assertEqual(
+            (resolution.code, resolution.explicit_revocation),
+            ("session_revoked", True),
         )
 
     def test_revoking_one_session_does_not_revoke_second_session(self):
@@ -228,6 +303,45 @@ class ClientSessionServiceTests(TestCase):
         self.assertEqual(issued.record.revocation_reason, "signed_out")
         self.assertEqual(issued.record.revoked_at, signed_out_at)
 
+    def test_revocation_writers_reject_reasons_outside_internal_vocabulary(self):
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+
+        with self.assertRaises(ValueError):
+            revoke_client_session(session=issued.record, reason="expired")
+        with self.assertRaises(ValueError):
+            revoke_account_sessions(account=issued.record.account, reason="expired")
+
+        issued.record.refresh_from_db()
+        self.assertIsNone(issued.record.revoked_at)
+        self.assertEqual(issued.record.revocation_reason, "")
+
+    def test_revocation_writer_accepts_each_internal_reason(self):
+        cases = (
+            ("signed_out", "session_revoked"),
+            ("session_revoked", "session_revoked"),
+            ("account_disabled", "account_disabled"),
+            ("account_revoked", "account_revoked"),
+        )
+
+        for index, (reason, external_code) in enumerate(cases, start=1):
+            with self.subTest(reason=reason):
+                issued = issue_client_session(
+                    user=self.user,
+                    installation_id=uuid.UUID(int=index),
+                    client_version="0.17.0",
+                )
+                revoke_client_session(session=issued.record, reason=reason)
+                self.assertEqual(issued.record.revocation_reason, reason)
+                resolution = resolve_client_session(
+                    token=issued.access_token,
+                    installation_id=issued.record.installation_id,
+                )
+                self.assertEqual(resolution.code, external_code)
+
     def test_active_resolution_updates_last_seen(self):
         issued = issue_client_session(
             user=self.user,
@@ -243,6 +357,75 @@ class ClientSessionServiceTests(TestCase):
         )
 
         self.assertGreater(resolution.record.last_seen_at, previous)
+
+    def test_invalid_revoked_and_unknown_resolution_leave_last_seen_unchanged(self):
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+        previous = timezone.now() - timedelta(days=1)
+        ClientSession.objects.filter(pk=issued.record.pk).update(last_seen_at=previous)
+
+        resolve_client_session(
+            token=issued.access_token,
+            installation_id=uuid.UUID("22222222-2222-4222-8222-222222222222"),
+        )
+        issued.record.refresh_from_db()
+        self.assertEqual(issued.record.last_seen_at, previous)
+
+        revoke_client_session(
+            session=issued.record,
+            reason=ClientSession.RevocationReason.SESSION_REVOKED,
+        )
+        resolve_client_session(
+            token=issued.access_token,
+            installation_id=INSTALLATION_ID,
+        )
+        issued.record.refresh_from_db()
+        self.assertEqual(issued.record.last_seen_at, previous)
+
+        resolve_client_session(
+            token="u" * 43,
+            installation_id=INSTALLATION_ID,
+        )
+        issued.record.refresh_from_db()
+        self.assertEqual(issued.record.last_seen_at, previous)
+
+    def test_revocation_during_resolution_prevents_last_seen_update_and_active_result(self):
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+        previous = issued.record.created_at - timedelta(days=1)
+        ClientSession.objects.filter(pk=issued.record.pk).update(last_seen_at=previous)
+        revoked_at = issued.record.created_at + timedelta(seconds=1)
+        attempted_last_seen = revoked_at + timedelta(seconds=1)
+
+        def revoke_before_last_seen_update():
+            ClientSession.objects.filter(pk=issued.record.pk).update(
+                revoked_at=revoked_at,
+                revocation_reason=ClientSession.RevocationReason.SESSION_REVOKED,
+            )
+            return attempted_last_seen
+
+        with patch(
+            "history.client_sessions.timezone.now",
+            side_effect=revoke_before_last_seen_update,
+        ):
+            resolution = resolve_client_session(
+                token=issued.access_token,
+                installation_id=INSTALLATION_ID,
+            )
+
+        issued.record.refresh_from_db()
+        self.assertEqual(
+            (resolution.code, resolution.explicit_revocation),
+            ("session_revoked", True),
+        )
+        self.assertEqual(issued.record.last_seen_at, previous)
+        self.assertEqual(resolution.record.revoked_at, revoked_at)
 
     def test_session_token_is_not_logged(self):
         with self.assertNoLogs(level=0):
