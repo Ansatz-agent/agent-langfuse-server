@@ -7,10 +7,11 @@ from datetime import timedelta
 from uuid import UUID
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
-from .models import TraceUploadToken
+from .models import AccountIdentity, ClientSession, TraceUploadToken
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,17 @@ class IssuedTraceToken:
     access_token: str
     record: TraceUploadToken
     rotated: bool
+
+
+@dataclass(frozen=True)
+class TraceTokenIntrospection:
+    record: TraceUploadToken | None
+    reason: str
+    explicit_revocation: bool
+
+
+class TraceTokenIssuanceError(ValueError):
+    pass
 
 
 def token_digest(value: str) -> str:
@@ -28,24 +40,76 @@ def session_key_digest(value: str) -> str:
     return token_digest(value)
 
 
-@transaction.atomic
-def issue_trace_token(*, user, session_key: str, installation_id: UUID):
-    now = timezone.now()
-    session_digest = session_key_digest(session_key)
-    current = TraceUploadToken.objects.filter(
-        user=user,
-        session_key_digest=session_digest,
-        installation_id=installation_id,
-        revoked_at__isnull=True,
+def _locked_active_client_session(client_session: ClientSession) -> ClientSession:
+    initial = ClientSession.objects.select_related("account").get(pk=client_session.pk)
+    user = get_user_model().objects.select_for_update().get(pk=initial.account.user_id)
+    account = AccountIdentity.objects.select_for_update().get(pk=initial.account_id)
+    session = (
+        ClientSession.objects.select_for_update()
+        .select_related("account__user")
+        .get(pk=client_session.pk)
     )
+    if not user.is_active:
+        raise TraceTokenIssuanceError("account_disabled")
+    if account.state == AccountIdentity.State.REVOKED:
+        raise TraceTokenIssuanceError("account_revoked")
+    if session.revoked_at is not None:
+        raise TraceTokenIssuanceError("session_revoked")
+    return session
+
+
+def _trace_token_authority(*, client_session, user, session_key, installation_id):
+    native = client_session is not None
+    legacy_values = (user, session_key, installation_id)
+    if native:
+        if any(value is not None for value in legacy_values):
+            raise ValueError("Trace token issuance requires exactly one authority form")
+        session = _locked_active_client_session(client_session)
+        return session.account.user, session.credential_digest, session.installation_id, session
+    if any(value is None for value in legacy_values) or not isinstance(session_key, str):
+        raise ValueError("Trace token issuance requires exactly one authority form")
+    return user, session_key_digest(session_key), installation_id, None
+
+
+@transaction.atomic
+def issue_trace_token(
+    *,
+    client_session: ClientSession | None = None,
+    user=None,
+    session_key: str | None = None,
+    installation_id: UUID | None = None,
+):
+    now = timezone.now()
+    user, session_digest, installation_id, bound_session = _trace_token_authority(
+        client_session=client_session,
+        user=user,
+        session_key=session_key,
+        installation_id=installation_id,
+    )
+    if bound_session is None:
+        current = TraceUploadToken.objects.filter(
+            user=user,
+            session_key_digest=session_digest,
+            installation_id=installation_id,
+            revoked_at__isnull=True,
+        )
+    else:
+        current = TraceUploadToken.objects.filter(
+            client_session=bound_session,
+            revoked_at__isnull=True,
+        )
     rotated = current.exists()
-    current.update(revoked_at=now)
+    current.update(
+        revoked_at=now,
+        revocation_reason=TraceUploadToken.RevocationReason.ROTATED,
+    )
     access_token = secrets.token_urlsafe(32)
     record = TraceUploadToken.objects.create(
         digest=token_digest(access_token),
         user=user,
         session_key_digest=session_digest,
         installation_id=installation_id,
+        client_session=bound_session,
         scope=settings.TRACE_UPLOAD_TOKEN_SCOPE,
         audience=settings.TRACE_UPLOAD_TOKEN_AUDIENCE,
         created_at=now,
@@ -58,25 +122,55 @@ def issue_trace_token(*, user, session_key: str, installation_id: UUID):
     )
 
 
-def introspect_trace_token(value: str) -> TraceUploadToken | None:
+def _session_revocation_reason(session: ClientSession) -> str | None:
+    if not session.account.user.is_active:
+        return "account_disabled"
+    if session.account.state == AccountIdentity.State.REVOKED:
+        return "account_revoked"
+    if session.revoked_at is not None:
+        return "session_revoked"
+    return None
+
+
+def introspect_trace_token(value: str) -> TraceTokenIntrospection:
     if not isinstance(value, str) or not 32 <= len(value) <= 128:
-        return None
+        return TraceTokenIntrospection(None, "invalid_token", False)
     record = (
-        TraceUploadToken.objects.select_related("user")
+        TraceUploadToken.objects.select_related(
+            "user__account_identity",
+            "client_session__account__user",
+        )
         .filter(digest=token_digest(value))
         .first()
     )
+    if record is None:
+        return TraceTokenIntrospection(None, "invalid_token", False)
     now = timezone.now()
+    if record.client_session_id is not None:
+        reason = _session_revocation_reason(record.client_session)
+        if reason is not None:
+            return TraceTokenIntrospection(record, reason, True)
+    else:
+        legacy_account, _ = AccountIdentity.objects.get_or_create(user=record.user)
+        if not record.user.is_active:
+            return TraceTokenIntrospection(record, "account_disabled", True)
+        if legacy_account.state == AccountIdentity.State.REVOKED:
+            return TraceTokenIntrospection(record, "account_revoked", True)
+    if record.expires_at <= now:
+        return TraceTokenIntrospection(record, "token_expired", False)
+    if record.revoked_at is not None:
+        reason = (
+            "token_rotated"
+            if record.revocation_reason == TraceUploadToken.RevocationReason.ROTATED
+            else "token_revoked"
+        )
+        return TraceTokenIntrospection(record, reason, False)
     if (
-        record is None
-        or record.revoked_at is not None
-        or record.expires_at <= now
-        or not record.user.is_active
-        or record.scope != settings.TRACE_UPLOAD_TOKEN_SCOPE
+        record.scope != settings.TRACE_UPLOAD_TOKEN_SCOPE
         or record.audience != settings.TRACE_UPLOAD_TOKEN_AUDIENCE
     ):
-        return None
-    return record
+        return TraceTokenIntrospection(record, "invalid_token", False)
+    return TraceTokenIntrospection(record, "active", False)
 
 
 def revoke_session_trace_tokens(*, user, session_key: str) -> int:
@@ -86,7 +180,10 @@ def revoke_session_trace_tokens(*, user, session_key: str) -> int:
         user=user,
         session_key_digest=session_key_digest(session_key),
         revoked_at__isnull=True,
-    ).update(revoked_at=timezone.now())
+    ).update(
+        revoked_at=timezone.now(),
+        revocation_reason=TraceUploadToken.RevocationReason.REVOKED,
+    )
 
 
 def revoke_device_trace_tokens(*, user, installation_id: UUID) -> int:
@@ -94,4 +191,17 @@ def revoke_device_trace_tokens(*, user, installation_id: UUID) -> int:
         user=user,
         installation_id=installation_id,
         revoked_at__isnull=True,
-    ).update(revoked_at=timezone.now())
+    ).update(
+        revoked_at=timezone.now(),
+        revocation_reason=TraceUploadToken.RevocationReason.REVOKED,
+    )
+
+
+def revoke_client_session_trace_tokens(*, client_session: ClientSession) -> int:
+    return TraceUploadToken.objects.filter(
+        client_session=client_session,
+        revoked_at__isnull=True,
+    ).update(
+        revoked_at=timezone.now(),
+        revocation_reason=TraceUploadToken.RevocationReason.REVOKED,
+    )

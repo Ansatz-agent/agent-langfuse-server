@@ -4,6 +4,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.utils import timezone
 
@@ -17,7 +18,7 @@ from history.client_sessions import (
     revoke_account_sessions,
     revoke_client_session,
 )
-from history.models import AccountIdentity, ClientSession
+from history.models import AccountIdentity, ClientSession, TraceUploadToken
 
 
 INSTALLATION_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
@@ -73,6 +74,19 @@ class ClientSessionServiceTests(TestCase):
             (resolution.record, resolution.code, resolution.explicit_revocation),
             (None, "invalid_session_credential", False),
         )
+
+    def test_persisted_session_installation_binding_cannot_be_changed(self):
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+        issued.record.installation_id = uuid.UUID(
+            "22222222-2222-4222-8222-222222222222"
+        )
+
+        with self.assertRaises(ValidationError):
+            issued.record.save()
 
     def test_malformed_token_is_not_explicit_revocation(self):
         for token in (None, "x" * 31, "x" * 129):
@@ -321,6 +335,41 @@ class ClientSessionServiceTests(TestCase):
         self.assertIsNone(second_resolution.code)
         self.assertEqual(ClientSession.objects.count(), 2)
         self.assertEqual(first.record.account, second.record.account)
+
+    def test_session_and_account_revocations_retain_and_revoke_bound_trace_tokens(self):
+        from history.trace_tokens import issue_trace_token
+
+        first = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+        second = issue_client_session(
+            user=self.user,
+            installation_id=uuid.UUID("22222222-2222-4222-8222-222222222222"),
+            client_version="0.17.1",
+        )
+        first_token = issue_trace_token(client_session=first.record)
+        second_token = issue_trace_token(client_session=second.record)
+
+        revoke_client_session(
+            session=first.record,
+            reason=ClientSession.RevocationReason.SESSION_REVOKED,
+        )
+        first_token.record.refresh_from_db()
+        second_token.record.refresh_from_db()
+        self.assertEqual(first_token.record.revocation_reason, "revoked")
+        self.assertIsNotNone(first_token.record.revoked_at)
+        self.assertIsNone(second_token.record.revoked_at)
+
+        revoke_account_sessions(
+            account=first.record.account,
+            reason=ClientSession.RevocationReason.ACCOUNT_REVOKED,
+        )
+        second_token.record.refresh_from_db()
+        self.assertEqual(second_token.record.revocation_reason, "revoked")
+        self.assertIsNotNone(second_token.record.revoked_at)
+        self.assertEqual(TraceUploadToken.objects.count(), 2)
 
     def test_account_revocation_retains_and_revokes_every_active_session(self):
         first = issue_client_session(

@@ -8,6 +8,7 @@ from history.auth_views import (
     client_session,
     native_client_session,
     native_client_session_current,
+    native_trace_token,
     trace_token,
     trace_token_introspect,
     trace_token_revoke_device,
@@ -27,6 +28,11 @@ urlpatterns = [
         "auth/api/client-session/current/",
         native_client_session_current,
         name="native-client-session-current",
+    ),
+    path(
+        "auth/api/client-session/trace-token/",
+        native_trace_token,
+        name="native-trace-token",
     ),
     path("auth/api/trace-token/", trace_token, name="trace-token"),
     path(

@@ -162,6 +162,8 @@ class TraceTokenTests(TestCase):
                 "token_id",
                 "platform_user_id",
                 "platform_username",
+                "account_id",
+                "session_id",
                 "installation_id",
                 "expires_at",
                 "scope",
@@ -171,6 +173,7 @@ class TraceTokenTests(TestCase):
         self.assertIs(body["active"], True)
         self.assertEqual(body["platform_user_id"], str(self.user.pk))
         self.assertEqual(body["platform_username"], self.user.username)
+        self.assertIsNone(body["session_id"])
         self.assertEqual(body["installation_id"], INSTALLATION_ID)
         self.assertEqual(body["scope"], "trace:write")
         self.assertEqual(body["audience"], "ansatz-trace-gateway")
@@ -181,14 +184,14 @@ class TraceTokenTests(TestCase):
         record = TraceUploadToken.objects.get()
 
         cases = []
-        cases.append(("malformed", "not-a-token", None))
-        cases.append(("unknown", "z" * 43, None))
-        cases.append(("expired", token, {"expires_at": timezone.now()}))
-        cases.append(("revoked", token, {"revoked_at": timezone.now()}))
-        cases.append(("wrong-scope", token, {"scope": "other"}))
-        cases.append(("wrong-audience", token, {"audience": "other"}))
+        cases.append(("malformed", "not-a-token", None, "invalid_token", False))
+        cases.append(("unknown", "z" * 43, None, "invalid_token", False))
+        cases.append(("expired", token, {"expires_at": timezone.now()}, "token_expired", False))
+        cases.append(("revoked", token, {"revoked_at": timezone.now()}, "token_revoked", False))
+        cases.append(("wrong-scope", token, {"scope": "other"}, "invalid_token", False))
+        cases.append(("wrong-audience", token, {"audience": "other"}, "invalid_token", False))
 
-        for label, candidate, updates in cases:
+        for label, candidate, updates, reason, explicit_revocation in cases:
             with self.subTest(label=label):
                 record.refresh_from_db()
                 record.expires_at = timezone.now() + timedelta(minutes=15)
@@ -201,7 +204,14 @@ class TraceTokenTests(TestCase):
                 record.save()
                 response = self.introspect(candidate)
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.json(), {"active": False})
+                self.assertEqual(
+                    response.json(),
+                    {
+                        "active": False,
+                        "reason": reason,
+                        "explicit_revocation": explicit_revocation,
+                    },
+                )
                 self.assertEqual(response["Cache-Control"], "no-store")
 
         record.expires_at = timezone.now() + timedelta(minutes=15)
@@ -211,7 +221,14 @@ class TraceTokenTests(TestCase):
         record.save()
         self.user.is_active = False
         self.user.save(update_fields=["is_active"])
-        self.assertEqual(self.introspect(token).json(), {"active": False})
+        self.assertEqual(
+            self.introspect(token).json(),
+            {
+                "active": False,
+                "reason": "account_disabled",
+                "explicit_revocation": True,
+            },
+        )
 
     def test_internal_credential_is_constant_shape_and_never_logged(self):
         issued = self.issue().json()
@@ -239,7 +256,14 @@ class TraceTokenTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIsNotNone(TraceUploadToken.objects.get().revoked_at)
-        self.assertEqual(self.introspect(issued["access_token"]).json(), {"active": False})
+        self.assertEqual(
+            self.introspect(issued["access_token"]).json(),
+            {
+                "active": False,
+                "reason": "token_revoked",
+                "explicit_revocation": False,
+            },
+        )
 
     def test_device_revoke_only_revokes_current_users_selected_installation(self):
         csrf = self.authenticate()
@@ -260,7 +284,14 @@ class TraceTokenTests(TestCase):
             response.json(),
             {"installation_id": INSTALLATION_ID, "revoked": 1},
         )
-        self.assertEqual(self.introspect(first["access_token"]).json(), {"active": False})
+        self.assertEqual(
+            self.introspect(first["access_token"]).json(),
+            {
+                "active": False,
+                "reason": "token_revoked",
+                "explicit_revocation": False,
+            },
+        )
         self.assertIs(self.introspect(second["access_token"]).json()["active"], True)
 
     def test_issue_rejects_invalid_json_schema_and_content_type(self):

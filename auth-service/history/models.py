@@ -68,17 +68,21 @@ class ClientSession(models.Model):
 
     def save(self, *args, **kwargs):
         if self.pk:
-            persisted_session_id = (
+            persisted = (
                 type(self)
                 .objects.filter(pk=self.pk)
-                .values_list("session_id", flat=True)
+                .values("session_id", "installation_id")
                 .first()
             )
-            if (
-                persisted_session_id is not None
-                and persisted_session_id != self.session_id
-            ):
+            if persisted is not None and persisted["session_id"] != self.session_id:
                 raise ValidationError({"session_id": "Session ID cannot be changed."})
+            if (
+                persisted is not None
+                and persisted["installation_id"] != self.installation_id
+            ):
+                raise ValidationError(
+                    {"installation_id": "Installation ID cannot be changed."}
+                )
         return super().save(*args, **kwargs)
 
 
@@ -227,12 +231,23 @@ class ImportBatch(models.Model):
 
 
 class TraceUploadToken(models.Model):
+    class RevocationReason(models.TextChoices):
+        ROTATED = "rotated", "Rotated"
+        REVOKED = "revoked", "Revoked"
+
     token_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     digest = models.CharField(max_length=64, unique=True)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="trace_upload_tokens",
+    )
+    client_session = models.ForeignKey(
+        ClientSession,
+        on_delete=models.PROTECT,
+        related_name="trace_upload_tokens",
+        null=True,
+        blank=True,
     )
     session_key_digest = models.CharField(max_length=64)
     installation_id = models.UUIDField()
@@ -241,6 +256,11 @@ class TraceUploadToken(models.Model):
     created_at = models.DateTimeField()
     expires_at = models.DateTimeField()
     revoked_at = models.DateTimeField(null=True, blank=True)
+    revocation_reason = models.CharField(
+        max_length=16,
+        choices=RevocationReason.choices,
+        blank=True,
+    )
 
     class Meta:
         indexes = [

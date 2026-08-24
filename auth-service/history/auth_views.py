@@ -23,6 +23,7 @@ from .client_sessions import (
 )
 from .models import ClientSession
 from .trace_tokens import (
+    TraceTokenIssuanceError,
     introspect_trace_token,
     issue_trace_token,
     revoke_device_trace_tokens,
@@ -373,20 +374,66 @@ def trace_token_introspect(request):
     payload, error = _json_payload(request)
     if error is not None:
         return _json_response({"active": False}, status=error.status_code)
-    record = introspect_trace_token(payload.get("token"))
-    if record is None:
-        return _json_response({"active": False})
+    result = introspect_trace_token(payload.get("token"))
+    if result.record is None or result.reason != "active":
+        return _json_response(
+            {
+                "active": False,
+                "reason": result.reason,
+                "explicit_revocation": result.explicit_revocation,
+            }
+        )
+    record = result.record
+    account = (
+        record.client_session.account
+        if record.client_session_id is not None
+        else record.user.account_identity
+    )
     return _json_response(
         {
             "active": True,
             "token_id": str(record.token_id),
             "platform_user_id": str(record.user_id),
             "platform_username": record.user.get_username(),
+            "account_id": str(account.account_id),
+            "session_id": (
+                str(record.client_session.session_id)
+                if record.client_session_id is not None
+                else None
+            ),
             "installation_id": str(record.installation_id),
             "expires_at": record.expires_at.isoformat(),
             "scope": record.scope,
             "audience": record.audience,
         }
+    )
+
+
+@csrf_exempt
+def native_trace_token(request):
+    if request.method != "POST":
+        response = _json_response({"detail": "method_not_allowed"}, status=405)
+        response["Allow"] = "POST"
+        return response
+    resolution = _native_session_resolution(request)
+    error = _native_session_resolution_response(resolution)
+    if error is not None:
+        return error
+    try:
+        issued = issue_trace_token(client_session=resolution.record)
+    except TraceTokenIssuanceError:
+        refreshed = _native_session_resolution(request)
+        error = _native_session_resolution_response(refreshed)
+        return error if error is not None else _native_session_unavailable()
+    record = issued.record
+    return _json_response(
+        {
+            "access_token": issued.access_token,
+            "expires_at": record.expires_at.isoformat(),
+            "expires_in": settings.TRACE_UPLOAD_TOKEN_TTL_SECONDS,
+            "installation_id": str(record.installation_id),
+        },
+        status=200 if issued.rotated else 201,
     )
 
 

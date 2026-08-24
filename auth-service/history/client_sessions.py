@@ -131,13 +131,29 @@ def _validate_revocation_reason(reason: str) -> None:
         raise ValueError("Unsupported client session revocation reason")
 
 
-@transaction.atomic
-def revoke_client_session(*, session, reason) -> ClientSession:
-    _validate_revocation_reason(reason)
-    ClientSession.objects.filter(pk=session.pk, revoked_at__isnull=True).update(
+def _locked_client_session(session: ClientSession) -> ClientSession:
+    initial = ClientSession.objects.select_related("account").get(pk=session.pk)
+    user = _locked_user(initial.account.user)
+    _locked_account_identity_for_user(user)
+    return ClientSession.objects.select_for_update().get(pk=session.pk)
+
+
+def _revoke_locked_client_session(*, session: ClientSession, reason: str) -> bool:
+    updated = ClientSession.objects.filter(pk=session.pk, revoked_at__isnull=True).update(
         revoked_at=timezone.now(),
         revocation_reason=reason,
     )
+    from history.trace_tokens import revoke_client_session_trace_tokens
+
+    revoke_client_session_trace_tokens(client_session=session)
+    return bool(updated)
+
+
+@transaction.atomic
+def revoke_client_session(*, session, reason) -> ClientSession:
+    _validate_revocation_reason(reason)
+    locked_session = _locked_client_session(session)
+    _revoke_locked_client_session(session=locked_session, reason=reason)
     session.refresh_from_db()
     return session
 
@@ -145,13 +161,17 @@ def revoke_client_session(*, session, reason) -> ClientSession:
 @transaction.atomic
 def revoke_account_sessions(*, account, reason) -> int:
     _validate_revocation_reason(reason)
-    return ClientSession.objects.filter(
-        account=account,
-        revoked_at__isnull=True,
-    ).update(
-        revoked_at=timezone.now(),
-        revocation_reason=reason,
+    user = _locked_user(account.user)
+    account = _locked_account_identity_for_user(user)
+    sessions = list(
+        ClientSession.objects.select_for_update()
+        .filter(account=account)
+        .order_by("pk")
     )
+    revoked = 0
+    for session in sessions:
+        revoked += _revoke_locked_client_session(session=session, reason=reason)
+    return revoked
 
 
 @transaction.atomic
