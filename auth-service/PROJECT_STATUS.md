@@ -34,6 +34,28 @@
 
 ## 2. 当前完成情况
 
+### 2.0 Native Client Session 源码交接（2026-08-25）
+
+认证连续性服务端源码已完成可执行交接，但本文件不把它表述为生产部署或迁移
+证据。权威运维入口是 [`NATIVE_CLIENT_SESSION.md`](NATIVE_CLIENT_SESSION.md)：
+
+- `history.0006_account_identity_client_session` 添加并回填不可变 UUID
+  AccountIdentity 与保留的 native ClientSession；
+  `history.0007_trace_token_client_session` 以可空、受保护关联绑定 native
+  TraceUploadToken，并保留其撤销原因。
+- 已实现 `/auth/api/client-session/`、`/auth/api/client-session/current/` 和
+  `/auth/api/client-session/trace-token/`，以及对 native Trace 的结构化
+  introspection。旧 Web-session/Trace 路由仍保留为 rollout 兼容接口。
+- Admin 仅允许超级管理员以 revoke/disable 动作记录 Session 或账户终端状态；
+  不允许新增、编辑或删除 AccountIdentity/ClientSession 证据行。
+- 回滚必须保留 `0006`/`0007` 的加性数据库状态和所有 identity/Session/Trace
+  记录，只停止 native 路由流量；它不授权清除客户端的 SessionDB、附件、对话或
+  Trace outbox。
+
+提交部署或切换客户端前，先按 handoff 的 Gateway → auth service → Gateway
+identity handling → client 顺序核对，并运行其中列出的 server 与 client fixture
+行为测试。
+
 ### 2.1 架构与权限
 
 已实现 Django + SQLite 多用户历史门户：

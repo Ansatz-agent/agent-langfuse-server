@@ -107,6 +107,26 @@ NPM 容器应能直接访问 `http://agent-history-web:8000/healthz`；应用不
 - 管理员创建账户或重置密码后，通过已核验的带外渠道交付初始密码；不得写入 Git、命令参数、服务器日志或无访问控制的聊天/工单。
 - 用户首次成功登录后仍由管理员负责后续重置；Hermes 客户端不提供账户生命周期操作。
 
+### Native Client Session 操作
+
+认证连续性协议的唯一运维契约见 [`NATIVE_CLIENT_SESSION.md`](NATIVE_CLIENT_SESSION.md)。
+它定义了不可变 `account_id`、原生 Session/Trace 路由与 no-store 响应、
+迁移 `history.0006`/`0007`、终端撤销分类、管理动作、兼容性和回滚顺序。
+
+- Native Session、AccountIdentity 与已撤销 TraceUploadToken 是保留的审计证据；
+  不得通过 Admin、ORM 或 SQL 删除这些行来登出或撤销设备。
+- 只能由超级管理员使用 `revoke_sessions`、`disable_accounts` 或
+  `revoke_accounts`；前者仅影响选中 Session，后两者会撤销各自仍活跃的
+  Session 及其绑定的 Trace token。
+- `invalid_session_credential`、服务不可达和普通 Django Web Session 过期均为
+  非终端状态。只有 account/session ID 与本地缓存匹配的结构化
+  `account_disabled`、`account_revoked` 或 `session_revoked` 才是终端状态。
+- 不在日志、命令行、Git、工单或聊天记录 native bearer、Trace bearer、Django
+  session cookie、CSRF 值或 Gateway internal secret；示例只能使用 handoff 中的
+  sentinel 值。
+- 回滚只停止使用 native 路由并保留迁移后的数据库和记录；绝不要求删除客户端
+  SessionDB、附件、对话、projects/profiles 或 Trace outbox。
+
 ### 预留功能接口
 
 - 页面：`/agent/features/history-synthesis/`、`/agent/features/api-credits/`；
