@@ -1,7 +1,85 @@
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
+
+
+class AccountIdentity(models.Model):
+    class State(models.TextChoices):
+        ACTIVE = "active", "Active"
+        REVOKED = "revoked", "Revoked"
+
+    account_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="account_identity",
+    )
+    state = models.CharField(
+        max_length=16,
+        choices=State.choices,
+        default=State.ACTIVE,
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revocation_reason = models.CharField(max_length=32, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            persisted_account_id = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values_list("account_id", flat=True)
+                .first()
+            )
+            if (
+                persisted_account_id is not None
+                and persisted_account_id != self.account_id
+            ):
+                raise ValidationError({"account_id": "Account ID cannot be changed."})
+        return super().save(*args, **kwargs)
+
+
+class ClientSession(models.Model):
+    class RevocationReason(models.TextChoices):
+        SIGNED_OUT = "signed_out", "Signed out"
+        SESSION_REVOKED = "session_revoked", "Session revoked"
+        ACCOUNT_DISABLED = "account_disabled", "Account disabled"
+        ACCOUNT_REVOKED = "account_revoked", "Account revoked"
+
+    session_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    account = models.ForeignKey(
+        AccountIdentity,
+        on_delete=models.PROTECT,
+        related_name="client_sessions",
+    )
+    installation_id = models.UUIDField()
+    credential_digest = models.CharField(max_length=64, unique=True)
+    client_version = models.CharField(max_length=64)
+    created_at = models.DateTimeField()
+    last_seen_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revocation_reason = models.CharField(
+        max_length=32,
+        choices=RevocationReason.choices,
+        blank=True,
+    )
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            persisted_session_id = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values_list("session_id", flat=True)
+                .first()
+            )
+            if (
+                persisted_session_id is not None
+                and persisted_session_id != self.session_id
+            ):
+                raise ValidationError({"session_id": "Session ID cannot be changed."})
+        return super().save(*args, **kwargs)
 
 
 class HistorySessionQuerySet(models.QuerySet):

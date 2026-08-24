@@ -232,3 +232,35 @@ class TokenUsageMigrationTests(TransactionTestCase):
         self.assertEqual(session.cache_read_tokens, 222_333)
         self.assertEqual(session.cache_write_tokens, 444)
         self.assertEqual(session.reasoning_tokens, 5_678)
+
+
+class AccountIdentityMigrationTests(TransactionTestCase):
+    migrate_from = [("history", "0005_trace_upload_token")]
+    migrate_to = [("history", "0006_account_identity_client_session")]
+
+    def tearDown(self):
+        MigrationExecutor(connection).migrate(self.migrate_to)
+        super().tearDown()
+
+    def test_existing_users_receive_distinct_uuid4_account_ids(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_from)
+        old_apps = executor.loader.project_state(self.migrate_from).apps
+        User = old_apps.get_model("auth", "User")
+        first = User.objects.create(username="first-existing")
+        second = User.objects.create(username="second-existing")
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_to)
+        apps = executor.loader.project_state(self.migrate_to).apps
+        Identity = apps.get_model("history", "AccountIdentity")
+        rows = list(
+            Identity.objects.order_by("user_id").values_list(
+                "user_id", "account_id", "state"
+            )
+        )
+
+        self.assertEqual([row[0] for row in rows], [first.pk, second.pk])
+        self.assertEqual(len({row[1] for row in rows}), 2)
+        self.assertTrue(all(row[1].version == 4 for row in rows))
+        self.assertEqual([row[2] for row in rows], ["active", "active"])
