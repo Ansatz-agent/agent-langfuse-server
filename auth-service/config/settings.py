@@ -1,5 +1,4 @@
 import os
-import re
 import secrets
 from pathlib import Path
 
@@ -63,14 +62,6 @@ ALLOWED_HOSTS = [
 CSRF_TRUSTED_ORIGINS = [
     item.strip() for item in os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if item.strip()
 ]
-
-SCRIPT_NAME = os.getenv("DJANGO_SCRIPT_NAME", "").strip()
-if SCRIPT_NAME and not re.fullmatch(r"/[A-Za-z0-9_-]+", SCRIPT_NAME):
-    raise ImproperlyConfigured(
-        "DJANGO_SCRIPT_NAME must be empty or one absolute path segment without a trailing slash"
-    )
-FORCE_SCRIPT_NAME = SCRIPT_NAME or None
-URL_PREFIX = f"{SCRIPT_NAME}/" if SCRIPT_NAME else "/"
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -141,11 +132,11 @@ TIME_ZONE = "Asia/Shanghai"
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = f"{URL_PREFIX}static/"
+STATIC_URL = "/auth/static/"
 STATIC_ROOT = Path(os.getenv("DJANGO_STATIC_ROOT", str(BASE_DIR / "staticfiles")))
 STATIC_BACKEND = (
     "django.contrib.staticfiles.storage.StaticFilesStorage"
-    if DEBUG
+    if DEBUG or ENVIRONMENT == "test"
     else "whitenoise.storage.CompressedManifestStaticFilesStorage"
 )
 STORAGES = {
@@ -155,7 +146,7 @@ STORAGES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 LOGIN_URL = "login"
-LOGIN_REDIRECT_URL = "history:dashboard"
+LOGIN_REDIRECT_URL = "/traces/"
 LOGOUT_REDIRECT_URL = "login"
 
 AXES_FAILURE_LIMIT = 10
@@ -178,11 +169,13 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_NAME = os.getenv("DJANGO_SESSION_COOKIE_NAME", "agent_history_sessionid")
-SESSION_COOKIE_PATH = URL_PREFIX
+SESSION_COOKIE_NAME = "__Host-ansatz_sessionid"
+SESSION_COOKIE_PATH = "/"
+SESSION_COOKIE_DOMAIN = None
 CSRF_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_NAME = os.getenv("DJANGO_CSRF_COOKIE_NAME", "agent_history_csrftoken")
-CSRF_COOKIE_PATH = URL_PREFIX
+CSRF_COOKIE_NAME = "__Host-ansatz_csrftoken"
+CSRF_COOKIE_PATH = "/"
+CSRF_COOKIE_DOMAIN = None
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 HERMES_SESSION_ABSOLUTE_AGE_SECONDS = int(
@@ -208,6 +201,20 @@ if ENVIRONMENT == "production":
         )
 elif not TRACE_GATEWAY_INTERNAL_SECRET:
     TRACE_GATEWAY_INTERNAL_SECRET = secrets.token_urlsafe(32)
+LANGFUSE_INTERNAL_BASE_URL = os.getenv(
+    "LANGFUSE_INTERNAL_BASE_URL",
+    "http://langfuse-web:3000/langfuse/api/public",
+).rstrip("/")
+LANGFUSE_PROJECT_PUBLIC_KEY = os.getenv("LANGFUSE_PROJECT_PUBLIC_KEY", "").strip()
+LANGFUSE_PROJECT_SECRET_KEY = os.getenv("LANGFUSE_PROJECT_SECRET_KEY", "").strip()
+LANGFUSE_API_TIMEOUT_SECONDS = 5
+LANGFUSE_API_MAX_PAGES = 5
+if ENVIRONMENT == "production" and (
+    not LANGFUSE_PROJECT_PUBLIC_KEY or not LANGFUSE_PROJECT_SECRET_KEY
+):
+    raise ImproperlyConfigured(
+        "LANGFUSE_PROJECT_PUBLIC_KEY and LANGFUSE_PROJECT_SECRET_KEY are required in production"
+    )
 SECURE_SSL_REDIRECT = not DEBUG
 SECURE_HSTS_SECONDS = 0 if DEBUG else 3600
 SECURE_HSTS_INCLUDE_SUBDOMAINS = False

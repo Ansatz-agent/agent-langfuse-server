@@ -93,10 +93,11 @@ class DashboardTests(TestCase):
         self.assertEqual(response.context["dashboard_stats"]["tool_calls"], 4)
         self.assertEqual(response.context["dashboard_stats"]["memory_calls"], 1)
 
-    def test_login_redirects_to_dashboard_instead_of_session_list(self):
+    def test_login_redirects_to_personal_traces(self):
         response = self.client.post(
             reverse("login"),
             {"username": "dashboard-alice", "password": "safe-dashboard-pass-1"},
         )
 
-        self.assertRedirects(response, reverse("history:dashboard"))
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("trace-dashboard"))

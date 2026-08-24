@@ -81,9 +81,14 @@ def client_session(request):
     response = JsonResponse(
         {
             "authenticated": True,
+            "sub": str(request.user.pk),
             "username": request.user.get_username(),
+            "role": "admin"
+            if request.user.is_staff or request.user.is_superuser
+            else "user",
             "server_time": timezone.now().isoformat(),
             "session_expires_at": expires_at.isoformat(),
+            "trace_dashboard_url": "/traces/",
         }
     )
     response["Cache-Control"] = "no-store"
@@ -185,6 +190,7 @@ def trace_token_introspect(request):
             "active": True,
             "token_id": str(record.token_id),
             "platform_user_id": str(record.user_id),
+            "platform_username": record.user.get_username(),
             "installation_id": str(record.installation_id),
             "expires_at": record.expires_at.isoformat(),
             "scope": record.scope,
