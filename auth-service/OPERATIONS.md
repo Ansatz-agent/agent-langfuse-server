@@ -116,8 +116,8 @@ NPM 容器应能直接访问 `http://agent-history-web:8000/healthz`；应用不
 - Native Session、AccountIdentity 与已撤销 TraceUploadToken 是保留的审计证据；
   不得通过 Admin、ORM 或 SQL 删除这些行来登出或撤销设备。
 - 只能由超级管理员使用 `revoke_sessions`、`disable_accounts` 或
-  `revoke_accounts`；前者仅影响选中 Session，后两者会撤销各自仍活跃的
-  Session 及其绑定的 Trace token。
+  `revoke_accounts`；前者仅变更选中且仍活跃的 Session，并保留已撤销行的首次
+  reason；后两者会撤销各自仍活跃的 Session 及其绑定的 Trace token。
 - `invalid_session_credential`、服务不可达和普通 Django Web Session 过期均为
   非终端状态。只有 account/session ID 与本地缓存匹配的结构化
   `account_disabled`、`account_revoked` 或 `session_revoked` 才是终端状态。

@@ -28,8 +28,10 @@ work around those permissions with direct ORM or SQL deletion.
 
 The versioned machine-readable subset is
 [`contracts/native-client-session-v1.json`](contracts/native-client-session-v1.json).
-All native responses, including errors and method rejections, carry
-`Cache-Control: no-store`.
+Each response from the three native **client** routes below, including errors
+and method rejections, carries `Cache-Control: no-store`.  Internal
+introspection is a Gateway-only endpoint, not a native client route; its JSON
+success and error responses currently use the same no-store response helper.
 
 The examples use non-secret sentinels only:
 
@@ -227,7 +229,8 @@ For an active native-bound token, `200` returns:
 ```
 
 `platform_user_id` and `platform_username` remain for legacy compatibility;
-`account_id` is the authorization identity.  An inactive result has exactly:
+`account_id` is the authorization identity.  With a valid internal secret, an
+inactive-token result has exactly:
 
 ```json
 {
@@ -255,14 +258,15 @@ row deletion:
 
 | Action | Admin list | Result |
 |---|---|---|
-| `revoke_sessions` | `ClientSession` | Revokes only the selected native Sessions with retained `session_revoked` evidence. |
+| `revoke_sessions` | `ClientSession` | Changes only selected, still-active native Sessions to retained `session_revoked` evidence. |
 | `disable_accounts` | Django `User` | Sets selected users `is_active=False` and revokes each still-active native Session as `account_disabled`. |
 | `revoke_accounts` | `AccountIdentity` | Marks the identity `revoked` and revokes each still-active native Session as `account_revoked`. |
 
 These operations also revoke active TraceUploadTokens bound to every affected
 native Session.  A selected-Session revoke is deliberately isolated from other
-Sessions for that account.  Account-wide actions retain an earlier per-Session
-revocation reason rather than overwrite that evidence.
+Sessions for that account and leaves an already-revoked selected Session's
+first reason unchanged.  Account-wide actions also retain an earlier
+per-Session revocation reason rather than overwrite that evidence.
 
 If a disabled user is re-enabled through account administration, previously
 revoked native Sessions remain revoked; a new Web bootstrap is required to
@@ -331,8 +335,9 @@ rtk proxy conda run -n dl python manage.py test \
 The matching client fixture consumer is run from the client repository:
 
 ```bash
-rtk proxy conda run -n dl bash scripts/run_tests.sh \
-  tests/hermes_cli/client_auth/test_contract_fixture.py -q
+rtk proxy conda run -n dl bash -c \
+  'export HERMES_PYTHON=/Users/yuxiaoy/miniconda3/envs/dl/bin/python; \
+   bash scripts/run_tests.sh tests/hermes_cli/client_auth/test_contract_fixture.py -q'
 ```
 
 These tests are the executable source for route names, response keys, terminal

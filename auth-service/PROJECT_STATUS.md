@@ -47,7 +47,8 @@
   `/auth/api/client-session/trace-token/`，以及对 native Trace 的结构化
   introspection。旧 Web-session/Trace 路由仍保留为 rollout 兼容接口。
 - Admin 仅允许超级管理员以 revoke/disable 动作记录 Session 或账户终端状态；
-  不允许新增、编辑或删除 AccountIdentity/ClientSession 证据行。
+  `revoke_sessions` 只变更选中且仍活跃的 Session，并保留已撤销行的首次
+  reason；不允许新增、编辑或删除 AccountIdentity/ClientSession 证据行。
 - 回滚必须保留 `0006`/`0007` 的加性数据库状态和所有 identity/Session/Trace
   记录，只停止 native 路由流量；它不授权清除客户端的 SessionDB、附件、对话或
   Trace outbox。
