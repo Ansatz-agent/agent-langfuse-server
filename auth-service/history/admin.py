@@ -2,20 +2,13 @@ from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import Group
-from django.utils import timezone
 
 from .client_sessions import (
-    account_identity_for_user,
-    revoke_account_sessions,
+    disable_account,
+    revoke_account,
     revoke_client_session,
 )
-from .models import (
-    AccountIdentity,
-    ClientSession,
-    HistoryMessage,
-    HistorySession,
-    ImportBatch,
-)
+from .models import AccountIdentity, ClientSession, HistoryMessage, HistorySession, ImportBatch
 
 
 class SuperuserAdminSite(admin.AdminSite):
@@ -53,29 +46,13 @@ def revoke_sessions(modeladmin, request, queryset):
 @admin.action(description="Disable selected accounts")
 def disable_accounts(modeladmin, request, queryset):
     for user in queryset:
-        user.is_active = False
-        user.save(update_fields=["is_active"])
-        revoke_account_sessions(
-            account=account_identity_for_user(user),
-            reason=ClientSession.RevocationReason.ACCOUNT_DISABLED,
-        )
+        disable_account(user=user)
 
 
 @admin.action(description="Revoke selected accounts")
 def revoke_accounts(modeladmin, request, queryset):
     for account in queryset:
-        AccountIdentity.objects.filter(
-            pk=account.pk,
-            state=AccountIdentity.State.ACTIVE,
-        ).update(
-            state=AccountIdentity.State.REVOKED,
-            revoked_at=timezone.now(),
-            revocation_reason=ClientSession.RevocationReason.ACCOUNT_REVOKED,
-        )
-        revoke_account_sessions(
-            account=account,
-            reason=ClientSession.RevocationReason.ACCOUNT_REVOKED,
-        )
+        revoke_account(account=account)
 
 
 @admin.register(HistorySession, site=admin_site)

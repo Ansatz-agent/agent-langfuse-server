@@ -15,6 +15,7 @@ from django.views.decorators.csrf import csrf_exempt, csrf_protect
 from django.views.decorators.http import require_GET, require_POST
 
 from .client_sessions import (
+    ClientSessionIssuanceError,
     ClientSessionResolution,
     issue_client_session,
     resolve_client_session,
@@ -269,11 +270,14 @@ def _issue_native_client_session(request):
     installation_id = _native_session_issue_payload(payload)
     if installation_id is None:
         return _json_response({"detail": "invalid_request"}, status=400)
-    issued = issue_client_session(
-        user=request.user,
-        installation_id=installation_id,
-        client_version=payload["client_version"],
-    )
+    try:
+        issued = issue_client_session(
+            user=request.user,
+            installation_id=installation_id,
+            client_version=payload["client_version"],
+        )
+    except ClientSessionIssuanceError:
+        return _json_response({"detail": "authentication_required"}, status=401)
     record = issued.record
     return _json_response(
         {

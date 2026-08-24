@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from unittest.mock import patch
 from uuid import UUID
 
 from django.conf import settings
@@ -9,6 +10,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from history.auth_views import ABSOLUTE_EXPIRY_KEY
+from history.client_sessions import ClientSessionIssuanceError
 from history.models import AccountIdentity, ClientSession
 
 
@@ -198,6 +200,30 @@ class NativeClientSessionApiTests(TestCase):
                 )
                 self.assertEqual(response.status_code, status)
                 self.assertEqual(response["Cache-Control"], "no-store")
+        self.assertEqual(ClientSession.objects.count(), 0)
+
+    def test_terminal_session_issuance_race_returns_existing_authentication_error(self):
+        csrf = self.authenticate_web_session()
+
+        with patch(
+            "history.auth_views.issue_client_session",
+            side_effect=ClientSessionIssuanceError("account_disabled"),
+        ):
+            response = self.client.post(
+                reverse("native-client-session"),
+                data=json.dumps(
+                    {
+                        "installation_id": INSTALLATION_ID,
+                        "client_version": "0.17.0",
+                    }
+                ),
+                content_type="application/json",
+                HTTP_X_CSRFTOKEN=csrf,
+            )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"detail": "authentication_required"})
+        self.assertEqual(response["Cache-Control"], "no-store")
         self.assertEqual(ClientSession.objects.count(), 0)
 
     def test_bearer_resolution_is_strict_and_retryable_when_unavailable(self):

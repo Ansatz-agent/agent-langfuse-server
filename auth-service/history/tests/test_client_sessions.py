@@ -8,8 +8,11 @@ from django.test import TestCase
 from django.utils import timezone
 
 from history.client_sessions import (
+    ClientSessionIssuanceError,
     account_identity_for_user,
+    disable_account,
     issue_client_session,
+    revoke_account,
     resolve_client_session,
     revoke_account_sessions,
     revoke_client_session,
@@ -116,6 +119,70 @@ class ClientSessionServiceTests(TestCase):
             (resolution.record, resolution.code, resolution.explicit_revocation),
             (issued.record, "account_disabled", True),
         )
+
+    def test_disable_account_rejects_session_issuance_between_terminal_state_and_bulk_revoke(self):
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+        original_revoke = revoke_account_sessions
+
+        def issue_during_terminal_transition(*, account, reason):
+            with self.assertRaisesRegex(ClientSessionIssuanceError, "account_disabled"):
+                issue_client_session(
+                    user=self.user,
+                    installation_id=uuid.UUID("22222222-2222-4222-8222-222222222222"),
+                    client_version="0.17.1",
+                )
+            return original_revoke(account=account, reason=reason)
+
+        with patch(
+            "history.client_sessions.revoke_account_sessions",
+            side_effect=issue_during_terminal_transition,
+        ):
+            disable_account(user=self.user)
+
+        self.user.refresh_from_db()
+        issued.record.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+        self.assertEqual(issued.record.revocation_reason, "account_disabled")
+        self.assertEqual(ClientSession.objects.count(), 1)
+
+    def test_revoked_account_rejects_new_session_issuance(self):
+        account = account_identity_for_user(self.user)
+        revoke_account(account=account)
+
+        with self.assertRaisesRegex(ClientSessionIssuanceError, "account_revoked"):
+            issue_client_session(
+                user=self.user,
+                installation_id=INSTALLATION_ID,
+                client_version="0.17.0",
+            )
+
+        self.assertEqual(ClientSession.objects.count(), 0)
+
+    def test_terminal_account_transition_rolls_back_if_session_revocation_fails(self):
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+
+        with patch(
+            "history.client_sessions.revoke_account_sessions",
+            side_effect=RuntimeError("session revoke failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "session revoke failed"):
+                revoke_account(account=issued.record.account)
+
+        self.user.refresh_from_db()
+        issued.record.account.refresh_from_db()
+        issued.record.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+        self.assertEqual(issued.record.account.state, "active")
+        self.assertIsNone(issued.record.account.revoked_at)
+        self.assertIsNone(issued.record.revoked_at)
 
     def test_revoked_account_identity_is_explicitly_account_revoked(self):
         issued = issue_client_session(

@@ -2,6 +2,7 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
@@ -39,6 +40,10 @@ class ClientSessionResolution:
     explicit_revocation: bool
 
 
+class ClientSessionIssuanceError(ValueError):
+    pass
+
+
 def credential_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -48,9 +53,23 @@ def account_identity_for_user(user) -> AccountIdentity:
     return identity
 
 
+def _locked_user(user):
+    return get_user_model().objects.select_for_update().get(pk=user.pk)
+
+
+def _locked_account_identity_for_user(user) -> AccountIdentity:
+    account = account_identity_for_user(user)
+    return AccountIdentity.objects.select_for_update().get(pk=account.pk)
+
+
 @transaction.atomic
 def issue_client_session(*, user, installation_id, client_version) -> IssuedClientSession:
-    account = account_identity_for_user(user)
+    user = _locked_user(user)
+    account = _locked_account_identity_for_user(user)
+    if not user.is_active:
+        raise ClientSessionIssuanceError("account_disabled")
+    if account.state == AccountIdentity.State.REVOKED:
+        raise ClientSessionIssuanceError("account_revoked")
     access_token = secrets.token_urlsafe(32)
     now = timezone.now()
     record = ClientSession.objects.create(
@@ -133,3 +152,33 @@ def revoke_account_sessions(*, account, reason) -> int:
         revoked_at=timezone.now(),
         revocation_reason=reason,
     )
+
+
+@transaction.atomic
+def disable_account(*, user) -> AccountIdentity:
+    user = _locked_user(user)
+    account = _locked_account_identity_for_user(user)
+    if user.is_active:
+        user.is_active = False
+        user.save(update_fields=["is_active"])
+    revoke_account_sessions(
+        account=account,
+        reason=ClientSession.RevocationReason.ACCOUNT_DISABLED,
+    )
+    return account
+
+
+@transaction.atomic
+def revoke_account(*, account) -> AccountIdentity:
+    user = _locked_user(account.user)
+    account = _locked_account_identity_for_user(user)
+    if account.state == AccountIdentity.State.ACTIVE:
+        account.state = AccountIdentity.State.REVOKED
+        account.revoked_at = timezone.now()
+        account.revocation_reason = ClientSession.RevocationReason.ACCOUNT_REVOKED
+        account.save(update_fields=["state", "revoked_at", "revocation_reason"])
+    revoke_account_sessions(
+        account=account,
+        reason=ClientSession.RevocationReason.ACCOUNT_REVOKED,
+    )
+    return account
