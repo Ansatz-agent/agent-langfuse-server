@@ -9,7 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from history.auth_views import ABSOLUTE_EXPIRY_KEY
-from history.models import ClientSession
+from history.models import AccountIdentity, ClientSession
 
 
 INSTALLATION_ID = "11111111-1111-4111-8111-111111111111"
@@ -275,3 +275,62 @@ class NativeClientSessionApiTests(TestCase):
                 "retryable": False,
             },
         )
+
+    def test_account_terminal_states_persist_session_evidence_for_get_and_delete(self):
+        for state, code in (
+            ("disabled", "account_disabled"),
+            ("revoked", "account_revoked"),
+        ):
+            for method, route_name in (
+                ("get", "native-client-session"),
+                ("delete", "native-client-session-current"),
+            ):
+                with self.subTest(state=state, method=method):
+                    self.user.is_active = True
+                    self.user.save(update_fields=["is_active"])
+                    AccountIdentity.objects.filter(user=self.user).update(
+                        state=AccountIdentity.State.ACTIVE,
+                        revoked_at=None,
+                        revocation_reason="",
+                    )
+                    issued = self.issue()
+                    record = ClientSession.objects.get(session_id=issued["session_id"])
+                    if state == "disabled":
+                        self.user.is_active = False
+                        self.user.save(update_fields=["is_active"])
+                    else:
+                        AccountIdentity.objects.filter(pk=record.account_id).update(
+                            state=AccountIdentity.State.REVOKED,
+                            revoked_at=timezone.now(),
+                            revocation_reason="account_revoked",
+                        )
+                    headers = {
+                        "HTTP_AUTHORIZATION": f"Bearer {issued['session_token']}",
+                        "HTTP_X_ANSATZ_INSTALLATION_ID": INSTALLATION_ID,
+                    }
+                    response = getattr(self.client, method)(
+                        reverse(route_name),
+                        **headers,
+                    )
+                    self.assertEqual(response.status_code, 403)
+                    self.assertEqual(response["Cache-Control"], "no-store")
+                    body = response.json()
+                    self.assertEqual(
+                        set(body),
+                        {
+                            "state",
+                            "code",
+                            "account_id",
+                            "session_id",
+                            "revoked_at",
+                            "retryable",
+                        },
+                    )
+                    self.assertEqual(
+                        (body["state"], body["code"], body["retryable"]),
+                        ("revoked", code, False),
+                    )
+                    record.refresh_from_db()
+                    self.assertEqual(record.revocation_reason, code)
+                    self.assertIsNotNone(record.revoked_at)
+                    self.assertEqual(body["revoked_at"], record.revoked_at.isoformat())

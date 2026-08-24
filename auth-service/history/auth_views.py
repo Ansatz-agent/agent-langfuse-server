@@ -240,6 +240,8 @@ def _native_session_resolution(request):
 def _native_session_resolution_response(resolution):
     if resolution.explicit_revocation:
         record = resolution.record
+        if record.revoked_at is None:
+            record = revoke_client_session(session=record, reason=resolution.code)
         return _json_response(
             {
                 "state": "revoked",
