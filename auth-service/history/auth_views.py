@@ -8,12 +8,19 @@ from uuid import UUID
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView, LogoutView, redirect_to_login
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import csrf_exempt, csrf_protect
 from django.views.decorators.http import require_GET, require_POST
 
+from .client_sessions import (
+    ClientSessionResolution,
+    issue_client_session,
+    resolve_client_session,
+    revoke_client_session,
+)
+from .models import ClientSession
 from .trace_tokens import (
     introspect_trace_token,
     issue_trace_token,
@@ -101,6 +108,16 @@ def _json_response(payload, *, status=200):
     return response
 
 
+def _no_store(view):
+    @wraps(view)
+    def add_no_store(*args, **kwargs):
+        response = view(*args, **kwargs)
+        response["Cache-Control"] = "no-store"
+        return response
+
+    return add_no_store
+
+
 def _json_payload(request):
     if request.content_type != "application/json":
         return None, _json_response({"detail": "unsupported_media_type"}, status=415)
@@ -125,6 +142,13 @@ def _installation_id(value):
     return parsed
 
 
+def _native_installation_id(value):
+    installation_id = _installation_id(value)
+    if installation_id is None or str(installation_id) != value:
+        return None
+    return installation_id
+
+
 def _valid_issue_payload(payload):
     if set(payload) != {
         "installation_id",
@@ -143,6 +167,167 @@ def _valid_issue_payload(payload):
     ):
         return None
     return installation_id
+
+
+def _native_session_issue_payload(payload):
+    if set(payload) != {"installation_id", "client_version"}:
+        return None
+    installation_id = _native_installation_id(payload.get("installation_id"))
+    client_version = payload.get("client_version")
+    if (
+        installation_id is None
+        or not isinstance(client_version, str)
+        or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}", client_version)
+    ):
+        return None
+    return installation_id
+
+
+def _strict_json_object(pairs):
+    payload = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError("Duplicate JSON object key")
+        payload[key] = value
+    return payload
+
+
+def _native_json_payload(request):
+    if request.content_type != "application/json":
+        return None, _json_response({"detail": "unsupported_media_type"}, status=415)
+    try:
+        payload = json.loads(request.body, object_pairs_hook=_strict_json_object)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return None, _json_response({"detail": "invalid_request"}, status=400)
+    if not isinstance(payload, dict):
+        return None, _json_response({"detail": "invalid_request"}, status=400)
+    return payload, None
+
+
+def _native_session_unavailable():
+    return _json_response(
+        {
+            "state": "unavailable",
+            "code": "invalid_session_credential",
+            "retryable": True,
+        },
+        status=401,
+    )
+
+
+def _native_bearer_token(request):
+    match = re.fullmatch(
+        r"Bearer ([A-Za-z0-9_-]{32,128})",
+        request.headers.get("Authorization", ""),
+    )
+    return match.group(1) if match else None
+
+
+def _native_session_resolution(request):
+    token = _native_bearer_token(request)
+    installation_id = _native_installation_id(
+        request.headers.get("X-Ansatz-Installation-ID", "")
+    )
+    if token is None or installation_id is None:
+        return ClientSessionResolution(
+            None,
+            "invalid_session_credential",
+            False,
+        )
+    return resolve_client_session(token=token, installation_id=installation_id)
+
+
+def _native_session_resolution_response(resolution):
+    if resolution.explicit_revocation:
+        record = resolution.record
+        return _json_response(
+            {
+                "state": "revoked",
+                "code": resolution.code,
+                "account_id": str(record.account.account_id),
+                "session_id": str(record.session_id),
+                "revoked_at": record.revoked_at.isoformat(),
+                "retryable": False,
+            },
+            status=403,
+        )
+    if resolution.record is None:
+        return _native_session_unavailable()
+    return None
+
+
+@_no_store
+@csrf_protect
+def _issue_native_client_session(request):
+    if not request.user.is_authenticated or not has_valid_absolute_session(request):
+        return _json_response({"detail": "authentication_required"}, status=401)
+    payload, error = _native_json_payload(request)
+    if error is not None:
+        return error
+    installation_id = _native_session_issue_payload(payload)
+    if installation_id is None:
+        return _json_response({"detail": "invalid_request"}, status=400)
+    issued = issue_client_session(
+        user=request.user,
+        installation_id=installation_id,
+        client_version=payload["client_version"],
+    )
+    record = issued.record
+    return _json_response(
+        {
+            "account_id": str(record.account.account_id),
+            "session_id": str(record.session_id),
+            "session_token": issued.access_token,
+            "installation_id": str(record.installation_id),
+            "username": request.user.get_username(),
+            "issued_at": record.created_at.isoformat(),
+        },
+        status=201,
+    )
+
+
+@csrf_exempt
+def native_client_session(request):
+    if request.method == "POST":
+        return _issue_native_client_session(request)
+    if request.method == "GET":
+        resolution = _native_session_resolution(request)
+        error = _native_session_resolution_response(resolution)
+        if error is not None:
+            return error
+        record = resolution.record
+        return _json_response(
+            {
+                "state": "active",
+                "account_id": str(record.account.account_id),
+                "session_id": str(record.session_id),
+                "installation_id": str(record.installation_id),
+                "username": record.account.user.get_username(),
+                "server_time": timezone.now().isoformat(),
+            }
+        )
+    response = _json_response({"detail": "method_not_allowed"}, status=405)
+    response["Allow"] = "GET, POST"
+    return response
+
+
+@csrf_exempt
+def native_client_session_current(request):
+    if request.method != "DELETE":
+        response = _json_response({"detail": "method_not_allowed"}, status=405)
+        response["Allow"] = "DELETE"
+        return response
+    resolution = _native_session_resolution(request)
+    error = _native_session_resolution_response(resolution)
+    if error is not None:
+        return error
+    revoke_client_session(
+        session=resolution.record,
+        reason=ClientSession.RevocationReason.SIGNED_OUT,
+    )
+    response = HttpResponse(status=204)
+    response["Cache-Control"] = "no-store"
+    return response
 
 
 @require_POST

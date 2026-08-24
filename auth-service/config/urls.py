@@ -6,6 +6,8 @@ from history.auth_views import (
     HermesLoginView,
     HermesLogoutView,
     client_session,
+    native_client_session,
+    native_client_session_current,
     trace_token,
     trace_token_introspect,
     trace_token_revoke_device,
@@ -16,6 +18,16 @@ urlpatterns = [
     path("auth/login/", HermesLoginView.as_view(), name="login"),
     path("auth/logout/", HermesLogoutView.as_view(), name="logout"),
     path("auth/api/session/", client_session, name="client-session"),
+    path(
+        "auth/api/client-session/",
+        native_client_session,
+        name="native-client-session",
+    ),
+    path(
+        "auth/api/client-session/current/",
+        native_client_session_current,
+        name="native-client-session-current",
+    ),
     path("auth/api/trace-token/", trace_token, name="trace-token"),
     path(
         "auth/api/trace-token/revoke-device/",

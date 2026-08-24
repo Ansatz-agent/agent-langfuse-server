@@ -24,6 +24,14 @@ class AuthSurfaceTests(TestCase):
         self.assertEqual(reverse("login"), "/auth/login/")
         self.assertEqual(reverse("logout"), "/auth/logout/")
         self.assertEqual(reverse("client-session"), "/auth/api/session/")
+        self.assertEqual(
+            reverse("native-client-session"),
+            "/auth/api/client-session/",
+        )
+        self.assertEqual(
+            reverse("native-client-session-current"),
+            "/auth/api/client-session/current/",
+        )
         self.assertEqual(reverse("trace-token"), "/auth/api/trace-token/")
         self.assertEqual(
             reverse("trace-token-revoke-device"),
