@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Trace {{ trace_id }} · Ansatz{% endblock %}
+{% block content %}
+<section class="trace-heading">
+  <div><p class="eyebrow">TRACE DETAIL</p><h1>完整轨迹</h1><p class="muted">{{ trace_id }}</p></div>
+  <a class="trace-back" href="{% url 'trace-dashboard' %}">返回我的 Trace</a>
+</section>
+<section class="observation-list">
+  {% for observation in observations %}
+    <article>
+      <header>
+        <div><span class="observation-type">{{ observation.type }}</span><h2>{{ observation.name|default:"Observation" }}</h2></div>
+        <div class="observation-meta"><span>{{ observation.tokens|intcomma }} Tokens</span><span>{{ observation.cost_display }}</span><time>{{ observation.startTime }}</time></div>
+      </header>
+      <div class="trace-io-grid"><section><h3>Input / Tool parameters</h3><pre>{{ observation.input_display }}</pre></section><section><h3>Output / Tool result</h3><pre>{{ observation.output_display }}</pre></section></div>
+      {% if observation.metadata_display %}<details><summary>Metadata</summary><pre>{{ observation.metadata_display }}</pre></details>{% endif %}
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

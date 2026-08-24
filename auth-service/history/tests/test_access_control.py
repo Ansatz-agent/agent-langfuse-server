@@ -67,7 +67,7 @@ class HistoryAccessControlTests(TestCase):
             with self.subTest(endpoint=endpoint):
                 response = self.client.get(endpoint)
                 self.assertEqual(response.status_code, 302)
-                self.assertIn("/accounts/login/", response["Location"])
+                self.assertIn("/auth/login/", response["Location"])
 
     def test_normal_user_sees_only_owned_sessions(self):
         self.login_as("alice", "safe-test-pass-1")

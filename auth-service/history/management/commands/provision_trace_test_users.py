@@ -86,7 +86,7 @@ class Command(BaseCommand):
                     )
 
                 payload = "\n".join(
-                    ["AUTH_BASE_URL=https://c2sml.cn/agent", *credentials, ""]
+                    ["AUTH_BASE_URL=https://c2sml.cn/auth", *credentials, ""]
                 )
                 with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
                     file_descriptor = None

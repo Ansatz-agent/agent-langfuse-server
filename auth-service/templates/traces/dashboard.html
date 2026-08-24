@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}我的 Trace · Ansatz{% endblock %}
+{% block content %}
+<section class="trace-heading">
+  <div>
+    <p class="eyebrow">PERSONAL OBSERVABILITY</p>
+    <h1>我的 Trace</h1>
+    <p class="muted">仅显示账号 {{ request.user.username }} 的真实对话、模型调用和工具轨迹。</p>
+  </div>
+  <div class="trace-ranges" aria-label="时间范围">
+    <a class="{% if days == 7 %}active{% endif %}" href="?days=7&amp;q={{ query|urlencode }}">7 天</a>
+    <a class="{% if days == 30 %}active{% endif %}" href="?days=30&amp;q={{ query|urlencode }}">30 天</a>
+    <a class="{% if days == 90 %}active{% endif %}" href="?days=90&amp;q={{ query|urlencode }}">90 天</a>
+  </div>
+</section>
+
+{% if unavailable %}
+  <section class="trace-unavailable">
+    <h2>Trace 服务暂时不可用</h2>
+    <p>数据没有回退到未授权查询。请稍后刷新重试。</p>
+  </section>
+{% else %}
+  <section class="trace-metrics">
+    <article><span>Sessions</span><strong>{{ metrics.sessions|intcomma }}</strong><small>会话</small></article>
+    <article><span>Traces</span><strong>{{ metrics.traces|intcomma }}</strong><small>对话轮次</small></article>
+    <article><span>Tokens</span><strong>{{ metrics.tokens|intcomma }}</strong><small>模型用量</small></article>
+    <article><span>Cost</span><strong>{{ metrics.cost_display }}</strong><small>USD</small></article>
+    <article><span>Active days</span><strong>{{ metrics.active_days }}</strong><small>近 {{ days }} 天</small></article>
+  </section>
+
+  <section class="trace-grid">
+    <article class="trace-panel">
+      <header><div><p class="eyebrow">USAGE TREND</p><h2>每日 Token</h2></div></header>
+      <div class="trace-bars">
+        {% for row in daily %}
+          <div class="trace-bar" title="{{ row.date }} · {{ row.tokens }} tokens · {{ row.cost_display }}">
+            <span style="height: {{ row.percent }}%"></span><small>{{ row.date|slice:"5:" }}</small>
+          </div>
+        {% empty %}<p class="empty">当前范围内没有用量。</p>{% endfor %}
+      </div>
+    </article>
+    <article class="trace-panel">
+      <header><div><p class="eyebrow">MODEL MIX</p><h2>模型分布</h2></div></header>
+      <div class="trace-models">
+        {% for model in models %}
+          <div><p><strong>{{ model.name }}</strong><span>{{ model.tokens|intcomma }} tokens</span></p><i><b style="width: {{ model.percent }}%"></b></i></div>
+        {% empty %}<p class="empty">当前范围内没有模型调用。</p>{% endfor %}
+      </div>
+    </article>
+  </section>
+
+  <section class="trace-panel trace-sessions">
+    <header>
+      <div><p class="eyebrow">SESSIONS</p><h2>会话</h2></div>
+      <form method="get" class="trace-search">
+        <input type="hidden" name="days" value="{{ days }}">
+        <label><span class="sr-only">搜索会话</span><input name="q" maxlength="80" value="{{ query }}" placeholder="搜索 Session 或 Trace ID"></label>
+        <button type="submit">搜索</button>
+      </form>
+    </header>
+    <div class="trace-table">
+      {% for session in sessions %}
+        <a href="{% url 'trace-session-detail' session.id %}">
+          <span><strong>{{ session.trace_name }}</strong><small>{{ session.id }}</small></span>
+          <span><b>{{ session.trace_count }}</b><small>Traces</small></span>
+          <span><b>{{ session.tokens|intcomma }}</b><small>Tokens</small></span>
+          <span><b>{{ session.cost_display }}</b><small>Cost</small></span>
+          <span><b>{{ session.latest_trace_id }}</b><small>{{ session.last_seen|date:"m-d H:i" }}</small></span>
+        </a>
+      {% empty %}<p class="empty">当前范围内没有匹配的会话。</p>{% endfor %}
+    </div>
+  </section>
+{% endif %}
+{% endblock %}

@@ -10,6 +10,7 @@ from django.utils import timezone
 @override_settings(HERMES_SESSION_ABSOLUTE_AGE_SECONDS=3600)
 class ClientSessionApiTests(TestCase):
     def setUp(self):
+        self.client.defaults["HTTP_X_FORWARDED_PROTO"] = "https"
         self.user = get_user_model().objects.create_user(
             username="alice", password="safe-test-pass-1"
         )
@@ -35,12 +36,32 @@ class ClientSessionApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             set(body),
-            {"authenticated", "username", "server_time", "session_expires_at"},
+            {
+                "authenticated",
+                "sub",
+                "username",
+                "role",
+                "server_time",
+                "session_expires_at",
+                "trace_dashboard_url",
+            },
         )
         self.assertIs(body["authenticated"], True)
+        self.assertEqual(body["sub"], str(self.user.pk))
         self.assertEqual(body["username"], "alice")
+        self.assertEqual(body["role"], "user")
+        self.assertEqual(body["trace_dashboard_url"], "/traces/")
         expires = datetime.fromisoformat(body["session_expires_at"])
         self.assertGreaterEqual(expires, before + timedelta(minutes=59))
+
+    def test_staff_session_reports_admin_role(self):
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
+        self.login()
+        self.assertEqual(
+            self.client.get(reverse("client-session")).json()["role"],
+            "admin",
+        )
 
     def test_status_checks_do_not_slide_expiry(self):
         self.login()

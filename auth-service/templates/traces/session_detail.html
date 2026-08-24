@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Session {{ session_id }} · Ansatz{% endblock %}
+{% block content %}
+<section class="trace-heading">
+  <div><p class="eyebrow">SESSION TIMELINE</p><h1>会话时间线</h1><p class="muted">{{ session_id }}</p></div>
+  <a class="trace-back" href="{% url 'trace-dashboard' %}">返回我的 Trace</a>
+</section>
+<section class="trace-timeline">
+  {% for trace in traces %}
+    <article>
+      <header><div><p class="eyebrow">TRACE</p><h2><a href="{% url 'trace-detail' trace.id %}">{{ trace.id }}</a></h2></div><time>{{ trace.start_time }}</time></header>
+      <div class="trace-inline-stats"><span>{{ trace.observation_count }} Observations</span><span>{{ trace.tokens|intcomma }} Tokens</span><span>{{ trace.cost_display }}</span></div>
+      <div class="trace-io-grid"><section><h3>Input</h3><pre>{{ trace.input_display }}</pre></section><section><h3>Output</h3><pre>{{ trace.output_display }}</pre></section></div>
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

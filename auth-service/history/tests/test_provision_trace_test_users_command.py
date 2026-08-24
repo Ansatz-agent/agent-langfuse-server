@@ -50,6 +50,7 @@ class ProvisionTraceTestUsersCommandTests(TestCase):
             },
         )
         self.assertEqual(stat.S_IMODE(self.output.stat().st_mode), 0o600)
+        self.assertEqual(credentials["AUTH_BASE_URL"], "https://c2sml.cn/auth")
         self.assertNotEqual(
             credentials["USER_A_INSTALLATION_ID"],
             credentials["USER_B_INSTALLATION_ID"],

@@ -22,14 +22,21 @@ INSTALLATION_ID = "11111111-1111-4111-8111-111111111111"
 SECOND_INSTALLATION_ID = "22222222-2222-4222-8222-222222222222"
 
 
-@override_settings(TRACE_GATEWAY_INTERNAL_SECRET=INTERNAL_SECRET)
+@override_settings(
+    TRACE_GATEWAY_INTERNAL_SECRET=INTERNAL_SECRET,
+    CSRF_TRUSTED_ORIGINS=["https://testserver"],
+)
 class TraceTokenTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
             username="alice",
             password="safe-test-pass-1",
         )
-        self.client = Client(enforce_csrf_checks=True)
+        self.client = Client(
+            enforce_csrf_checks=True,
+            HTTP_X_FORWARDED_PROTO="https",
+            HTTP_ORIGIN="https://testserver",
+        )
 
     def authenticate(self) -> str:
         self.client.force_login(self.user)
@@ -50,7 +57,7 @@ class TraceTokenTests(TestCase):
         if csrf is None:
             csrf = self.authenticate()
         return self.client.post(
-            reverse("history:trace-token"),
+            reverse("trace-token"),
             data=json.dumps(
                 {
                     "installation_id": installation_id,
@@ -64,7 +71,7 @@ class TraceTokenTests(TestCase):
 
     def introspect(self, token: str, *, secret: str = INTERNAL_SECRET):
         return self.client.post(
-            reverse("history:trace-token-introspect"),
+            reverse("trace-token-introspect"),
             data=json.dumps({"token": token}),
             content_type="application/json",
             HTTP_X_ANSATZ_INTERNAL_TOKEN=secret,
@@ -74,13 +81,13 @@ class TraceTokenTests(TestCase):
         self.client.get(reverse("login"))
         csrf = self.client.cookies[settings.CSRF_COOKIE_NAME].value
         anonymous = self.issue(csrf=csrf)
-        self.assertEqual(anonymous.status_code, 401)
+        self.assertEqual(anonymous.status_code, 401, anonymous.content)
         self.assertEqual(anonymous.json(), {"detail": "authentication_required"})
         self.assertEqual(anonymous["Cache-Control"], "no-store")
 
         self.authenticate()
         missing_csrf = self.client.post(
-            reverse("history:trace-token"),
+            reverse("trace-token"),
             data=json.dumps(
                 {
                     "installation_id": INSTALLATION_ID,
@@ -154,6 +161,7 @@ class TraceTokenTests(TestCase):
                 "active",
                 "token_id",
                 "platform_user_id",
+                "platform_username",
                 "installation_id",
                 "expires_at",
                 "scope",
@@ -162,6 +170,7 @@ class TraceTokenTests(TestCase):
         )
         self.assertIs(body["active"], True)
         self.assertEqual(body["platform_user_id"], str(self.user.pk))
+        self.assertEqual(body["platform_username"], self.user.username)
         self.assertEqual(body["installation_id"], INSTALLATION_ID)
         self.assertEqual(body["scope"], "trace:write")
         self.assertEqual(body["audience"], "ansatz-trace-gateway")
@@ -240,7 +249,7 @@ class TraceTokenTests(TestCase):
             csrf=csrf,
         ).json()
         response = self.client.post(
-            reverse("history:trace-token-revoke-device"),
+            reverse("trace-token-revoke-device"),
             data=json.dumps({"installation_id": INSTALLATION_ID}),
             content_type="application/json",
             HTTP_X_CSRFTOKEN=csrf,
@@ -257,7 +266,7 @@ class TraceTokenTests(TestCase):
     def test_issue_rejects_invalid_json_schema_and_content_type(self):
         csrf = self.authenticate()
         wrong_type = self.client.post(
-            reverse("history:trace-token"),
+            reverse("trace-token"),
             data="{}",
             content_type="text/plain",
             HTTP_X_CSRFTOKEN=csrf,
@@ -280,7 +289,7 @@ class TraceTokenTests(TestCase):
         for value in invalid_values:
             with self.subTest(value=value):
                 response = self.client.post(
-                    reverse("history:trace-token"),
+                    reverse("trace-token"),
                     data=json.dumps(value),
                     content_type="application/json",
                     HTTP_X_CSRFTOKEN=csrf,
