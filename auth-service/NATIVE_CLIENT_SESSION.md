@@ -80,6 +80,17 @@ must be a 1--64 character version string accepted by the service.  Success is
 }
 ```
 
+Issuing a Session for an installation that already has a still-active Session
+on the same account atomically supersedes the prior Session: the old row is
+retained as terminal `superseded` evidence (wire code `session_revoked`) and
+its active Trace tokens are revoked in the same transaction.  Issuance is also
+rate-capped per account (`CLIENT_SESSION_ISSUANCE_RATE_LIMIT` per
+`CLIENT_SESSION_ISSUANCE_RATE_WINDOW_SECONDS`, default 10/hour); over the cap
+the endpoint returns `429` with a `Retry-After` header and exactly
+`{"detail":"issuance_rate_limited","retryable":true,"retry_after_seconds":N}`.
+Like every other bootstrap failure, a `429` is retryable and proves nothing
+about an existing native Session.
+
 Anonymous or expired Web Session bootstrap returns `401`
 `{"detail":"authentication_required"}`.  Bad JSON/body returns `400`
 `{"detail":"invalid_request"}`; a non-JSON content type returns `415`
@@ -140,8 +151,15 @@ credential.  The allowed terminal wire codes are exactly
 }
 ```
 
-`signed_out` is retained internally on the Session but is exposed as the
-terminal `session_revoked` wire code.  A client must not sign the user out for
+`signed_out`, `superseded`, and `credential_changed` are retained internally
+on the Session but are exposed as the terminal `session_revoked` wire code.
+Each Session is bound at issue time to a keyed HMAC of the account's password
+state (Django's session auth hash; never a plaintext credential).  A password
+change or reset makes that binding stale: the next resolution terminally
+revokes the Session as `credential_changed` and revokes its Trace tokens.
+Sessions have no arbitrary server-side lifetime; offline continuity is
+preserved until sign-out, supersession, credential change, or an account or
+Session revocation.  A client must not sign the user out for
 a `403` with unknown keys, invalid values, a non-terminal code, or mismatched
 identity; that is non-terminal protocol failure rather than proof about the
 cached Session.
@@ -307,7 +325,7 @@ before attempting any exceptional recovery procedure.
 
 ## Database migration, rollout, and rollback
 
-Apply migrations forward through `history.0007_trace_token_client_session`:
+Apply migrations forward through `history.0008_client_session_auth_binding`:
 
 ```bash
 rtk proxy conda run -n dl python manage.py migrate --noinput
@@ -321,12 +339,17 @@ rtk proxy conda run -n dl python manage.py migrate --noinput
   `TraceUploadToken.client_session` and a retained Trace-token
   `revocation_reason` (`rotated` or `revoked`).  Existing legacy user,
   session-digest, and installation fields remain.
+- `0008_client_session_auth_binding` adds `ClientSession.auth_state_digest`
+  (the password-state HMAC binding) and backfills it for every existing
+  Session from the owner's current password state, so pre-existing Sessions
+  stay valid until the next password change.  Its reverse data migration is a
+  no-op.
 
 Coordinate the rollout in this order:
 
 1. Deploy Gateway introspection parsing that tolerates additive fields while
    retaining its legacy response compatibility.
-2. Deploy this auth service and migrate through `0007`.
+2. Deploy this auth service and migrate through `0008`.
 3. Deploy Gateway durable identity handling with legacy identity fallback.
 4. Deploy clients that use the native Session and Trace routes.
 5. Retire legacy paths only after packaged-client adoption evidence.

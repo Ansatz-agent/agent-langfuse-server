@@ -109,7 +109,20 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": os.getenv("DJANGO_DB_PATH", str(BASE_DIR / "db.sqlite3")),
-        "OPTIONS": {"timeout": 20},
+        # SQLite ignores SELECT ... FOR UPDATE, so every write transaction
+        # must take the database write lock at BEGIN (IMMEDIATE) to make
+        # check-then-write service transactions safe across processes.  WAL
+        # keeps readers (status polling) unblocked while a writer commits.
+        "OPTIONS": {
+            "timeout": 20,
+            "transaction_mode": "IMMEDIATE",
+            "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+        },
+        # Concurrency tests need real SQLite file locking, which the default
+        # in-memory test database cannot exercise.
+        "TEST": {
+            "NAME": os.getenv("DJANGO_TEST_DB_PATH", str(BASE_DIR / "test_db.sqlite3"))
+        },
     }
 }
 
@@ -185,6 +198,15 @@ if HERMES_SESSION_ABSOLUTE_AGE_SECONDS < 300:
     raise ImproperlyConfigured(
         "HERMES_SESSION_ABSOLUTE_AGE_SECONDS must be at least 300"
     )
+CLIENT_SESSION_LAST_SEEN_MIN_INTERVAL_SECONDS = int(
+    os.getenv("CLIENT_SESSION_LAST_SEEN_MIN_INTERVAL_SECONDS", "60")
+)
+CLIENT_SESSION_ISSUANCE_RATE_LIMIT = int(
+    os.getenv("CLIENT_SESSION_ISSUANCE_RATE_LIMIT", "10")
+)
+CLIENT_SESSION_ISSUANCE_RATE_WINDOW_SECONDS = int(
+    os.getenv("CLIENT_SESSION_ISSUANCE_RATE_WINDOW_SECONDS", "3600")
+)
 TRACE_UPLOAD_TOKEN_TTL_SECONDS = 900
 TRACE_UPLOAD_TOKEN_SCOPE = "trace:write"
 TRACE_UPLOAD_TOKEN_AUDIENCE = "ansatz-trace-gateway"

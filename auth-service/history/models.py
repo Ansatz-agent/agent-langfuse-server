@@ -45,6 +45,8 @@ class ClientSession(models.Model):
     class RevocationReason(models.TextChoices):
         SIGNED_OUT = "signed_out", "Signed out"
         SESSION_REVOKED = "session_revoked", "Session revoked"
+        SUPERSEDED = "superseded", "Superseded by reissue"
+        CREDENTIAL_CHANGED = "credential_changed", "Credential changed"
         ACCOUNT_DISABLED = "account_disabled", "Account disabled"
         ACCOUNT_REVOKED = "account_revoked", "Account revoked"
 
@@ -56,6 +58,9 @@ class ClientSession(models.Model):
     )
     installation_id = models.UUIDField()
     credential_digest = models.CharField(max_length=64, unique=True)
+    # Keyed HMAC of the user's password state (Django's session auth hash),
+    # never a credential itself; a password change makes it stale.
+    auth_state_digest = models.CharField(max_length=64, blank=True, default="")
     client_version = models.CharField(max_length=64)
     created_at = models.DateTimeField()
     last_seen_at = models.DateTimeField()

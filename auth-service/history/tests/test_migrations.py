@@ -234,6 +234,52 @@ class TokenUsageMigrationTests(TransactionTestCase):
         self.assertEqual(session.reasoning_tokens, 5_678)
 
 
+class ClientSessionAuthBindingMigrationTests(TransactionTestCase):
+    migrate_from = [("history", "0007_trace_token_client_session")]
+    migrate_to = [("history", "0008_client_session_auth_binding")]
+
+    def tearDown(self):
+        MigrationExecutor(connection).migrate(self.migrate_to)
+        super().tearDown()
+
+    def test_existing_sessions_are_backfilled_with_current_password_binding(self):
+        from django.contrib.auth.hashers import make_password
+        from django.utils import timezone
+        from django.utils.crypto import salted_hmac
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_from)
+        old_apps = executor.loader.project_state(self.migrate_from).apps
+        User = old_apps.get_model("auth", "User")
+        Identity = old_apps.get_model("history", "AccountIdentity")
+        Session = old_apps.get_model("history", "ClientSession")
+        user = User.objects.create(
+            username="existing", password=make_password("existing-safe-pass-1")
+        )
+        identity = Identity.objects.create(user_id=user.pk)
+        now = timezone.now()
+        Session.objects.create(
+            account_id=identity.pk,
+            installation_id="11111111-1111-4111-8111-111111111111",
+            credential_digest="a" * 64,
+            client_version="0.17.0",
+            created_at=now,
+            last_seen_at=now,
+        )
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_to)
+        apps = executor.loader.project_state(self.migrate_to).apps
+
+        migrated = apps.get_model("history", "ClientSession").objects.get()
+        expected = salted_hmac(
+            "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash",
+            user.password,
+            algorithm="sha256",
+        ).hexdigest()
+        self.assertEqual(migrated.auth_state_digest, expected)
+
+
 class AccountIdentityMigrationTests(TransactionTestCase):
     migrate_from = [("history", "0005_trace_upload_token")]
     migrate_to = [("history", "0006_account_identity_client_session")]

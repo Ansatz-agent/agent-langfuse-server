@@ -111,7 +111,7 @@ NPM 容器应能直接访问 `http://agent-history-web:8000/healthz`；应用不
 
 认证连续性协议的唯一运维契约见 [`NATIVE_CLIENT_SESSION.md`](NATIVE_CLIENT_SESSION.md)。
 它定义了不可变 `account_id`、原生 Session/Trace 路由与 no-store 响应、
-迁移 `history.0006`/`0007`、终端撤销分类、管理动作、兼容性和回滚顺序。
+迁移 `history.0006`--`0008`、终端撤销分类、管理动作、兼容性和回滚顺序。
 
 - Native Session、AccountIdentity 与已撤销 TraceUploadToken 是保留的审计证据；
   不得通过 Admin、ORM 或 SQL 删除这些行来登出或撤销设备。

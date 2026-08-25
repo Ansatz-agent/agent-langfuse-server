@@ -1,11 +1,16 @@
 import hashlib
+import sqlite3
+import threading
+import time
 import uuid
 from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.db import connection, transaction
+from django.test import TestCase, TransactionTestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from history.client_sessions import (
@@ -543,6 +548,194 @@ class ClientSessionServiceTests(TestCase):
         self.assertEqual(issued.record.last_seen_at, previous)
         self.assertEqual(resolution.record.revoked_at, revoked_at)
 
+    def test_password_change_terminally_revokes_sessions_and_trace_tokens(self):
+        from history.trace_tokens import issue_trace_token
+
+        self.user.set_password("initial-safe-test-pass-1")
+        self.user.save()
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+        token = issue_trace_token(client_session=issued.record)
+
+        self.user.set_password("rotated-safe-test-pass-2")
+        self.user.save()
+        resolution = resolve_client_session(
+            token=issued.access_token,
+            installation_id=INSTALLATION_ID,
+        )
+
+        self.assertEqual(
+            (resolution.code, resolution.explicit_revocation),
+            ("session_revoked", True),
+        )
+        self.assertEqual(resolution.record.pk, issued.record.pk)
+        issued.record.refresh_from_db()
+        self.assertEqual(issued.record.revocation_reason, "credential_changed")
+        self.assertIsNotNone(issued.record.revoked_at)
+        token.record.refresh_from_db()
+        self.assertEqual(token.record.revocation_reason, "revoked")
+        self.assertIsNotNone(token.record.revoked_at)
+        self.assertEqual(ClientSession.objects.count(), 1)
+
+    def test_password_binding_accepts_secret_key_fallback_rotation(self):
+        from django.conf import settings
+
+        self.user.set_password("initial-safe-test-pass-1")
+        self.user.save()
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+        old_secret = settings.SECRET_KEY
+
+        with override_settings(
+            SECRET_KEY="rotated-" + "b1C2d3E4" * 8,
+            SECRET_KEY_FALLBACKS=[old_secret],
+        ):
+            rotated = resolve_client_session(
+                token=issued.access_token,
+                installation_id=INSTALLATION_ID,
+            )
+            self.assertEqual(
+                (rotated.code, rotated.explicit_revocation),
+                (None, False),
+            )
+
+        with override_settings(
+            SECRET_KEY="rotated-" + "b1C2d3E4" * 8,
+            SECRET_KEY_FALLBACKS=[],
+        ):
+            dropped = resolve_client_session(
+                token=issued.access_token,
+                installation_id=INSTALLATION_ID,
+            )
+            self.assertEqual(
+                (dropped.code, dropped.explicit_revocation),
+                ("session_revoked", True),
+            )
+        issued.record.refresh_from_db()
+        self.assertEqual(issued.record.revocation_reason, "credential_changed")
+
+    def test_reissue_for_same_installation_supersedes_prior_session_and_tokens(self):
+        from history.trace_tokens import issue_trace_token
+
+        first = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+        first_token = issue_trace_token(client_session=first.record)
+
+        second = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.1",
+        )
+
+        first.record.refresh_from_db()
+        self.assertEqual(first.record.revocation_reason, "superseded")
+        self.assertIsNotNone(first.record.revoked_at)
+        first_token.record.refresh_from_db()
+        self.assertEqual(first_token.record.revocation_reason, "revoked")
+        self.assertIsNotNone(first_token.record.revoked_at)
+
+        first_resolution = resolve_client_session(
+            token=first.access_token,
+            installation_id=INSTALLATION_ID,
+        )
+        self.assertEqual(
+            (first_resolution.code, first_resolution.explicit_revocation),
+            ("session_revoked", True),
+        )
+        second_resolution = resolve_client_session(
+            token=second.access_token,
+            installation_id=INSTALLATION_ID,
+        )
+        self.assertIsNone(second_resolution.code)
+        self.assertEqual(ClientSession.objects.count(), 2)
+
+    def test_issuance_over_account_rate_cap_is_structured_retryable(self):
+        from history.client_sessions import ClientSessionRateLimitError
+
+        with override_settings(
+            CLIENT_SESSION_ISSUANCE_RATE_LIMIT=2,
+            CLIENT_SESSION_ISSUANCE_RATE_WINDOW_SECONDS=3600,
+        ):
+            for index in (1, 2):
+                issue_client_session(
+                    user=self.user,
+                    installation_id=uuid.UUID(int=index, version=4),
+                    client_version="0.17.0",
+                )
+
+            with self.assertRaises(ClientSessionRateLimitError) as caught:
+                issue_client_session(
+                    user=self.user,
+                    installation_id=uuid.UUID(int=3, version=4),
+                    client_version="0.17.0",
+                )
+
+        self.assertGreaterEqual(caught.exception.retry_after_seconds, 1)
+        self.assertLessEqual(caught.exception.retry_after_seconds, 3600)
+        self.assertEqual(ClientSession.objects.count(), 2)
+        # The cap is per account: another account still issues.
+        other = get_user_model().objects.create_user(username="bob")
+        with override_settings(
+            CLIENT_SESSION_ISSUANCE_RATE_LIMIT=2,
+            CLIENT_SESSION_ISSUANCE_RATE_WINDOW_SECONDS=3600,
+        ):
+            issue_client_session(
+                user=other,
+                installation_id=uuid.UUID(int=4, version=4),
+                client_version="0.17.0",
+            )
+
+    def test_fresh_resolution_is_read_only_and_stale_resolution_writes_once(self):
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+
+        with CaptureQueriesContext(connection) as fresh_queries:
+            resolution = resolve_client_session(
+                token=issued.access_token,
+                installation_id=INSTALLATION_ID,
+            )
+        self.assertIsNone(resolution.code)
+        self.assertEqual(
+            [
+                query["sql"]
+                for query in fresh_queries.captured_queries
+                if not query["sql"].upper().startswith("SELECT")
+            ],
+            [],
+        )
+
+        stale = timezone.now() - timedelta(days=1)
+        ClientSession.objects.filter(pk=issued.record.pk).update(last_seen_at=stale)
+        with CaptureQueriesContext(connection) as stale_queries:
+            resolution = resolve_client_session(
+                token=issued.access_token,
+                installation_id=INSTALLATION_ID,
+            )
+        self.assertIsNone(resolution.code)
+        self.assertGreater(resolution.record.last_seen_at, stale)
+        self.assertEqual(
+            len(
+                [
+                    query["sql"]
+                    for query in stale_queries.captured_queries
+                    if query["sql"].upper().startswith("UPDATE")
+                ]
+            ),
+            1,
+        )
+
     def test_session_token_is_not_logged(self):
         with self.assertNoLogs(level=0):
             issued = issue_client_session(
@@ -558,3 +751,177 @@ class ClientSessionServiceTests(TestCase):
                 session=issued.record,
                 reason=ClientSession.RevocationReason.SESSION_REVOKED,
             )
+
+
+class ClientSessionSqliteConcurrencyTests(TransactionTestCase):
+    """Cross-connection write races on the real (file-backed) SQLite test DB."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="alice")
+
+    def run_in_thread(self, work, errors):
+        def closed_after_work():
+            try:
+                work()
+            except Exception as exc:  # noqa: BLE001 - re-raised via assertions
+                errors.append(exc)
+            finally:
+                connection.close()
+
+        thread = threading.Thread(target=closed_after_work)
+        thread.start()
+        return thread
+
+    def test_sqlite_is_configured_for_wal_and_immediate_write_transactions(self):
+        self.assertEqual(
+            connection.settings_dict["OPTIONS"].get("transaction_mode"),
+            "IMMEDIATE",
+        )
+        with connection.cursor() as cursor:
+            cursor.execute("PRAGMA journal_mode")
+            self.assertEqual(cursor.fetchone()[0], "wal")
+            cursor.execute("PRAGMA busy_timeout")
+            self.assertEqual(cursor.fetchone()[0], 20000)
+
+    def test_atomic_blocks_second_sqlite_writer_until_commit(self):
+        db_path = connection.settings_dict["NAME"]
+        self.assertNotIn("memory", str(db_path))
+        probe = sqlite3.connect(db_path, timeout=0.2)
+        try:
+            with transaction.atomic():
+                with self.assertRaises(sqlite3.OperationalError):
+                    probe.execute("BEGIN IMMEDIATE")
+            probe.execute("BEGIN IMMEDIATE")
+            probe.rollback()
+        finally:
+            probe.close()
+
+    def test_disable_racing_issuance_leaves_no_active_session_or_tokens(self):
+        from history.trace_tokens import issue_trace_token
+
+        issuing = threading.Event()
+        release = threading.Event()
+        errors = []
+
+        def issue_holding_write_lock():
+            with transaction.atomic():
+                issued = issue_client_session(
+                    user=self.user,
+                    installation_id=INSTALLATION_ID,
+                    client_version="0.17.0",
+                )
+                issue_trace_token(client_session=issued.record)
+                issuing.set()
+                release.wait(10)
+
+        def disable_during_issuance():
+            self.assertTrue(issuing.wait(10))
+            disable_account(user=get_user_model().objects.get(pk=self.user.pk))
+
+        issuer = self.run_in_thread(issue_holding_write_lock, errors)
+        disabler = self.run_in_thread(disable_during_issuance, errors)
+        self.assertTrue(issuing.wait(10))
+        time.sleep(0.2)
+        release.set()
+        issuer.join(timeout=30)
+        disabler.join(timeout=30)
+        self.assertFalse(issuer.is_alive())
+        self.assertFalse(disabler.is_alive())
+
+        self.assertEqual(errors, [])
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+        self.assertEqual(ClientSession.objects.count(), 1)
+        self.assertEqual(
+            ClientSession.objects.filter(revoked_at__isnull=True).count(), 0
+        )
+        self.assertEqual(
+            ClientSession.objects.get().revocation_reason, "account_disabled"
+        )
+        self.assertEqual(
+            TraceUploadToken.objects.filter(revoked_at__isnull=True).count(), 0
+        )
+
+    def test_issuance_blocked_by_concurrent_disable_is_rejected(self):
+        disabling = threading.Event()
+        release = threading.Event()
+        errors = []
+        issuance_errors = []
+
+        def disable_holding_write_lock():
+            with transaction.atomic():
+                disable_account(user=self.user)
+                disabling.set()
+                release.wait(10)
+
+        def issue_during_disable():
+            self.assertTrue(disabling.wait(10))
+            try:
+                issue_client_session(
+                    user=self.user,
+                    installation_id=INSTALLATION_ID,
+                    client_version="0.17.0",
+                )
+            except ClientSessionIssuanceError as exc:
+                issuance_errors.append(str(exc))
+
+        disabler = self.run_in_thread(disable_holding_write_lock, errors)
+        issuer = self.run_in_thread(issue_during_disable, errors)
+        self.assertTrue(disabling.wait(10))
+        time.sleep(0.2)
+        release.set()
+        disabler.join(timeout=30)
+        issuer.join(timeout=30)
+        self.assertFalse(disabler.is_alive())
+        self.assertFalse(issuer.is_alive())
+
+        self.assertEqual(errors, [])
+        self.assertEqual(issuance_errors, ["account_disabled"])
+        self.assertEqual(ClientSession.objects.count(), 0)
+
+    def test_trace_token_issuance_racing_session_revoke_leaves_no_active_token(self):
+        from history.trace_tokens import TraceTokenIssuanceError, issue_trace_token
+
+        issued = issue_client_session(
+            user=self.user,
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+        revoking = threading.Event()
+        release = threading.Event()
+        errors = []
+        issuance_errors = []
+
+        def revoke_holding_write_lock():
+            with transaction.atomic():
+                revoke_client_session(
+                    session=ClientSession.objects.get(pk=issued.record.pk),
+                    reason=ClientSession.RevocationReason.SESSION_REVOKED,
+                )
+                revoking.set()
+                release.wait(10)
+
+        def issue_trace_token_during_revoke():
+            self.assertTrue(revoking.wait(10))
+            try:
+                issue_trace_token(
+                    client_session=ClientSession.objects.get(pk=issued.record.pk)
+                )
+            except TraceTokenIssuanceError as exc:
+                issuance_errors.append(str(exc))
+
+        revoker = self.run_in_thread(revoke_holding_write_lock, errors)
+        issuer = self.run_in_thread(issue_trace_token_during_revoke, errors)
+        self.assertTrue(revoking.wait(10))
+        time.sleep(0.2)
+        release.set()
+        revoker.join(timeout=30)
+        issuer.join(timeout=30)
+        self.assertFalse(revoker.is_alive())
+        self.assertFalse(issuer.is_alive())
+
+        self.assertEqual(errors, [])
+        self.assertEqual(issuance_errors, ["session_revoked"])
+        self.assertEqual(
+            TraceUploadToken.objects.filter(revoked_at__isnull=True).count(), 0
+        )

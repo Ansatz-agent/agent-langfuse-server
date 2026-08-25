@@ -148,6 +148,36 @@ class NativeTraceTokenTests(TestCase):
                 self.assertNotIn(token, combined)
                 self.assertNotIn(session["session_token"], combined)
 
+    def test_password_change_revokes_native_session_and_token_on_introspection(self):
+        self.user.set_password("initial-safe-test-pass-1")
+        self.user.save()
+        session = self.issue_native_session()
+        token = self.issue_native_trace(session).json()["access_token"]
+
+        self.user.set_password("rotated-safe-test-pass-2")
+        self.user.save()
+
+        response = self.introspect(token)
+        self.assertEqual(response.status_code, 200)
+        record = TraceUploadToken.objects.get()
+        record.client_session.refresh_from_db()
+        self.assertEqual(record.client_session.revocation_reason, "credential_changed")
+        self.assertIsNotNone(record.client_session.revoked_at)
+        self.assertEqual(record.revocation_reason, "revoked")
+        self.assertIsNotNone(record.revoked_at)
+        self.assertEqual(
+            response.json(),
+            {
+                "active": False,
+                "reason": "session_revoked",
+                "explicit_revocation": True,
+                "account_id": session["account_id"],
+                "session_id": session["session_id"],
+                "installation_id": session["installation_id"],
+                "revoked_at": record.client_session.revoked_at.isoformat(),
+            },
+        )
+
     def test_native_token_with_missing_or_inconsistent_session_binding_is_unavailable(self):
         session = self.issue_native_session()
         token = self.issue_native_trace(session).json()["access_token"]

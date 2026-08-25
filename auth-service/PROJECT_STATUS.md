@@ -42,14 +42,15 @@
 - `history.0006_account_identity_client_session` 添加并回填不可变 UUID
   AccountIdentity 与保留的 native ClientSession；
   `history.0007_trace_token_client_session` 以可空、受保护关联绑定 native
-  TraceUploadToken，并保留其撤销原因。
+  TraceUploadToken，并保留其撤销原因；`history.0008_client_session_auth_binding`
+  添加并回填 Session 的密码状态绑定（keyed HMAC，非明文凭据）。
 - 已实现 `/auth/api/client-session/`、`/auth/api/client-session/current/` 和
   `/auth/api/client-session/trace-token/`，以及对 native Trace 的结构化
   introspection。旧 Web-session/Trace 路由仍保留为 rollout 兼容接口。
 - Admin 仅允许超级管理员以 revoke/disable 动作记录 Session 或账户终端状态；
   `revoke_sessions` 只变更选中且仍活跃的 Session，并保留已撤销行的首次
   reason；不允许新增、编辑或删除 AccountIdentity/ClientSession 证据行。
-- 回滚必须保留 `0006`/`0007` 的加性数据库状态和所有 identity/Session/Trace
+- 回滚必须保留 `0006`/`0007`/`0008` 的加性数据库状态和所有 identity/Session/Trace
   记录，只停止 native 路由流量；它不授权清除客户端的 SessionDB、附件、对话或
   Trace outbox。
 

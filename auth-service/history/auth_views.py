@@ -16,6 +16,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from .client_sessions import (
     ClientSessionIssuanceError,
+    ClientSessionRateLimitError,
     ClientSessionResolution,
     issue_client_session,
     resolve_client_session,
@@ -279,6 +280,17 @@ def _issue_native_client_session(request):
         )
     except ClientSessionIssuanceError:
         return _json_response({"detail": "authentication_required"}, status=401)
+    except ClientSessionRateLimitError as exc:
+        response = _json_response(
+            {
+                "detail": "issuance_rate_limited",
+                "retryable": True,
+                "retry_after_seconds": exc.retry_after_seconds,
+            },
+            status=429,
+        )
+        response["Retry-After"] = str(exc.retry_after_seconds)
+        return response
     record = issued.record
     return _json_response(
         {

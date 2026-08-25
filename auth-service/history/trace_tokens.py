@@ -8,7 +8,6 @@ from datetime import timezone as datetime_timezone
 from uuid import UUID
 
 from django.conf import settings
-from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
@@ -54,19 +53,19 @@ def session_key_digest(value: str) -> str:
     return token_digest(value)
 
 
-def _locked_active_client_session(client_session: ClientSession) -> ClientSession:
-    initial = ClientSession.objects.select_related("account").get(pk=client_session.pk)
-    user = get_user_model().objects.select_for_update().get(pk=initial.account.user_id)
-    account = AccountIdentity.objects.select_for_update().get(pk=initial.account_id)
-    session = (
-        ClientSession.objects.select_for_update()
-        .select_related("account__user")
-        .get(pk=client_session.pk)
+def _active_client_session(client_session: ClientSession) -> ClientSession:
+    # Runs inside the issuing IMMEDIATE transaction, so this re-read observes
+    # the latest committed state; SQLite offers no row locks to take instead.
+    from history.client_sessions import enforce_credential_binding
+
+    session = ClientSession.objects.select_related("account__user").get(
+        pk=client_session.pk
     )
-    if not user.is_active:
+    if not session.account.user.is_active:
         raise TraceTokenIssuanceError("account_disabled")
-    if account.state == AccountIdentity.State.REVOKED:
+    if session.account.state == AccountIdentity.State.REVOKED:
         raise TraceTokenIssuanceError("account_revoked")
+    session = enforce_credential_binding(session)
     if session.revoked_at is not None:
         raise TraceTokenIssuanceError("session_revoked")
     return session
@@ -78,7 +77,7 @@ def _trace_token_authority(*, client_session, user, session_key, installation_id
     if native:
         if any(value is not None for value in legacy_values):
             raise ValueError("Trace token issuance requires exactly one authority form")
-        session = _locked_active_client_session(client_session)
+        session = _active_client_session(client_session)
         return session.account.user, session.credential_digest, session.installation_id, session
     if any(value is None for value in legacy_values) or not isinstance(session_key, str):
         raise ValueError("Trace token issuance requires exactly one authority form")
@@ -164,6 +163,8 @@ def _revocation_evidence(
         reason = {
             ClientSession.RevocationReason.SIGNED_OUT: "session_revoked",
             ClientSession.RevocationReason.SESSION_REVOKED: "session_revoked",
+            ClientSession.RevocationReason.SUPERSEDED: "session_revoked",
+            ClientSession.RevocationReason.CREDENTIAL_CHANGED: "session_revoked",
             ClientSession.RevocationReason.ACCOUNT_DISABLED: "account_disabled",
             ClientSession.RevocationReason.ACCOUNT_REVOKED: "account_revoked",
         }.get(session.revocation_reason)
@@ -212,6 +213,15 @@ def introspect_trace_token(value: str) -> TraceTokenIntrospection:
     now = timezone.now()
     try:
         binding = _native_binding(record)
+        if (
+            binding is not None
+            and binding.revoked_at is None
+            and binding.account.state == AccountIdentity.State.ACTIVE
+            and binding.account.user.is_active
+        ):
+            from history.client_sessions import enforce_credential_binding
+
+            binding = enforce_credential_binding(binding)
         revocation = _revocation_evidence(binding) if binding is not None else None
     except _TraceTokenAuthorityUnavailable:
         return TraceTokenIntrospection(None, "authentication_unavailable", False)

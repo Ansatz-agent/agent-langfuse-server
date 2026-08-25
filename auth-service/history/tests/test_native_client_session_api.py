@@ -302,6 +302,99 @@ class NativeClientSessionApiTests(TestCase):
             },
         )
 
+    def test_password_change_returns_exact_terminal_session_revoked_shape(self):
+        issued = self.issue()
+        self.user.set_password("rotated-safe-test-pass-2")
+        self.user.save()
+
+        headers = {
+            "HTTP_AUTHORIZATION": f"Bearer {issued['session_token']}",
+            "HTTP_X_ANSATZ_INSTALLATION_ID": INSTALLATION_ID,
+        }
+        response = self.client.get(reverse("native-client-session"), **headers)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response["Cache-Control"], "no-store")
+        record = ClientSession.objects.get(session_id=issued["session_id"])
+        self.assertEqual(record.revocation_reason, "credential_changed")
+        self.assertIsNotNone(record.revoked_at)
+        self.assertEqual(
+            response.json(),
+            {
+                "state": "revoked",
+                "code": "session_revoked",
+                "account_id": issued["account_id"],
+                "session_id": issued["session_id"],
+                "revoked_at": record.revoked_at.isoformat(),
+                "retryable": False,
+            },
+        )
+
+    def test_reissue_for_same_installation_supersedes_prior_session(self):
+        first = self.issue()
+        csrf = self.client.cookies[settings.CSRF_COOKIE_NAME].value
+        second = self.client.post(
+            reverse("native-client-session"),
+            data=json.dumps(
+                {
+                    "installation_id": INSTALLATION_ID,
+                    "client_version": "0.17.1",
+                }
+            ),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(second.status_code, 201)
+
+        prior = ClientSession.objects.get(session_id=first["session_id"])
+        self.assertEqual(prior.revocation_reason, "superseded")
+        self.assertIsNotNone(prior.revoked_at)
+        self.assertEqual(ClientSession.objects.count(), 2)
+
+        stale = self.client.get(
+            reverse("native-client-session"),
+            HTTP_AUTHORIZATION=f"Bearer {first['session_token']}",
+            HTTP_X_ANSATZ_INSTALLATION_ID=INSTALLATION_ID,
+        )
+        self.assertEqual(stale.status_code, 403)
+        self.assertEqual(stale.json()["code"], "session_revoked")
+        active = self.client.get(
+            reverse("native-client-session"),
+            HTTP_AUTHORIZATION=f"Bearer {second.json()['session_token']}",
+            HTTP_X_ANSATZ_INSTALLATION_ID=INSTALLATION_ID,
+        )
+        self.assertEqual(active.status_code, 200)
+
+    @override_settings(
+        CLIENT_SESSION_ISSUANCE_RATE_LIMIT=1,
+        CLIENT_SESSION_ISSUANCE_RATE_WINDOW_SECONDS=3600,
+    )
+    def test_rate_limited_issuance_returns_structured_retryable_429(self):
+        self.issue()
+        csrf = self.client.cookies[settings.CSRF_COOKIE_NAME].value
+
+        limited = self.client.post(
+            reverse("native-client-session"),
+            data=json.dumps(
+                {
+                    "installation_id": "22222222-2222-4222-8222-222222222222",
+                    "client_version": "0.17.0",
+                }
+            ),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+
+        self.assertEqual(limited.status_code, 429)
+        self.assertEqual(limited["Cache-Control"], "no-store")
+        body = limited.json()
+        self.assertEqual(set(body), {"detail", "retryable", "retry_after_seconds"})
+        self.assertEqual(body["detail"], "issuance_rate_limited")
+        self.assertIs(body["retryable"], True)
+        self.assertGreaterEqual(body["retry_after_seconds"], 1)
+        self.assertEqual(limited["Retry-After"], str(body["retry_after_seconds"]))
+        self.assertEqual(ClientSession.objects.count(), 1)
+
     def test_account_terminal_states_persist_session_evidence_for_get_and_delete(self):
         for state, code in (
             ("disabled", "account_disabled"),

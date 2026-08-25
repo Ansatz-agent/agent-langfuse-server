@@ -1,10 +1,13 @@
 import hashlib
 import secrets
 from dataclasses import dataclass
+from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
+from django.utils.crypto import constant_time_compare
 
 from history.models import AccountIdentity, ClientSession
 
@@ -13,6 +16,8 @@ _INTERNAL_REVOCATION_REASONS = frozenset(
     {
         ClientSession.RevocationReason.SIGNED_OUT,
         ClientSession.RevocationReason.SESSION_REVOKED,
+        ClientSession.RevocationReason.SUPERSEDED,
+        ClientSession.RevocationReason.CREDENTIAL_CHANGED,
         ClientSession.RevocationReason.ACCOUNT_DISABLED,
         ClientSession.RevocationReason.ACCOUNT_REVOKED,
     }
@@ -20,6 +25,10 @@ _INTERNAL_REVOCATION_REASONS = frozenset(
 _SESSION_REVOCATION_CODES = {
     ClientSession.RevocationReason.SIGNED_OUT: ClientSession.RevocationReason.SESSION_REVOKED,
     ClientSession.RevocationReason.SESSION_REVOKED: ClientSession.RevocationReason.SESSION_REVOKED,
+    ClientSession.RevocationReason.SUPERSEDED: ClientSession.RevocationReason.SESSION_REVOKED,
+    ClientSession.RevocationReason.CREDENTIAL_CHANGED: (
+        ClientSession.RevocationReason.SESSION_REVOKED
+    ),
     ClientSession.RevocationReason.ACCOUNT_DISABLED: (
         ClientSession.RevocationReason.ACCOUNT_DISABLED
     ),
@@ -44,6 +53,12 @@ class ClientSessionIssuanceError(ValueError):
     pass
 
 
+class ClientSessionRateLimitError(Exception):
+    def __init__(self, retry_after_seconds: int):
+        super().__init__("client_session_rate_limited")
+        self.retry_after_seconds = retry_after_seconds
+
+
 def credential_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -53,25 +68,76 @@ def account_identity_for_user(user) -> AccountIdentity:
     return identity
 
 
-def _locked_user(user):
-    return get_user_model().objects.select_for_update().get(pk=user.pk)
+# SQLite has no row locks (SELECT ... FOR UPDATE is a silent no-op), so
+# serialization comes from the connection's IMMEDIATE transaction mode: every
+# atomic block takes the single database write lock at BEGIN.  Inside such a
+# block a plain re-read observes the latest committed state, which is all the
+# check-then-write transactions below need.
+def _current_user(user):
+    return get_user_model().objects.get(pk=user.pk)
 
 
-def _locked_account_identity_for_user(user) -> AccountIdentity:
+def _current_account_identity_for_user(user) -> AccountIdentity:
     account = account_identity_for_user(user)
-    return AccountIdentity.objects.select_for_update().get(pk=account.pk)
+    return AccountIdentity.objects.get(pk=account.pk)
+
+
+def _credential_binding_current(record: ClientSession) -> bool:
+    digest = record.auth_state_digest
+    if not digest:
+        return True
+    user = record.account.user
+    if constant_time_compare(digest, user.get_session_auth_hash()):
+        return True
+    return any(
+        constant_time_compare(digest, fallback)
+        for fallback in user.get_session_auth_fallback_hash()
+    )
+
+
+def enforce_credential_binding(session: ClientSession) -> ClientSession:
+    """Terminally revoke a still-active session whose password binding is stale."""
+    if session.revoked_at is None and not _credential_binding_current(session):
+        return revoke_client_session(
+            session=session,
+            reason=ClientSession.RevocationReason.CREDENTIAL_CHANGED,
+        )
+    return session
+
+
+def _enforce_issuance_rate_cap(*, account, now) -> None:
+    window = timedelta(seconds=settings.CLIENT_SESSION_ISSUANCE_RATE_WINDOW_SECONDS)
+    recent = ClientSession.objects.filter(
+        account=account, created_at__gte=now - window
+    )
+    if recent.count() < settings.CLIENT_SESSION_ISSUANCE_RATE_LIMIT:
+        return
+    oldest = recent.order_by("created_at").values_list("created_at", flat=True).first()
+    retry_after = max(1, int((oldest + window - now).total_seconds()) + 1)
+    raise ClientSessionRateLimitError(retry_after)
 
 
 @transaction.atomic
 def issue_client_session(*, user, installation_id, client_version) -> IssuedClientSession:
-    user = _locked_user(user)
-    account = _locked_account_identity_for_user(user)
+    user = _current_user(user)
+    account = _current_account_identity_for_user(user)
     if not user.is_active:
         raise ClientSessionIssuanceError("account_disabled")
     if account.state == AccountIdentity.State.REVOKED:
         raise ClientSessionIssuanceError("account_revoked")
-    access_token = secrets.token_urlsafe(32)
     now = timezone.now()
+    _enforce_issuance_rate_cap(account=account, now=now)
+    superseded = ClientSession.objects.filter(
+        account=account,
+        installation_id=installation_id,
+        revoked_at__isnull=True,
+    ).order_by("pk")
+    for prior in superseded:
+        _revoke_active_client_session(
+            session=prior,
+            reason=ClientSession.RevocationReason.SUPERSEDED,
+        )
+    access_token = secrets.token_urlsafe(32)
     record = ClientSession.objects.create(
         account=account,
         installation_id=installation_id,
@@ -79,6 +145,7 @@ def issue_client_session(*, user, installation_id, client_version) -> IssuedClie
         client_version=client_version,
         created_at=now,
         last_seen_at=now,
+        auth_state_digest=user.get_session_auth_hash(),
     )
     return IssuedClientSession(access_token=access_token, record=record)
 
@@ -109,10 +176,31 @@ def resolve_client_session(*, token, installation_id) -> ClientSessionResolution
     if record is None or record.installation_id != installation_id:
         return ClientSessionResolution(None, "invalid_session_credential", False)
 
+    revocation = _explicit_revocation(record)
+    if revocation is not None:
+        return revocation
+    if not _credential_binding_current(record):
+        record = enforce_credential_binding(record)
+        record = ClientSession.objects.select_related("account__user").get(pk=record.pk)
+        return ClientSessionResolution(
+            record,
+            _SESSION_REVOCATION_CODES[ClientSession.RevocationReason.CREDENTIAL_CHANGED],
+            True,
+        )
+
+    # Status polling is read-mostly: only refresh last_seen_at once it has
+    # aged past the configured interval, with a conditional update that
+    # cannot resurrect a session revoked between the read and the write.
     last_seen_at = timezone.now()
+    min_interval = timedelta(
+        seconds=settings.CLIENT_SESSION_LAST_SEEN_MIN_INTERVAL_SECONDS
+    )
+    if record.last_seen_at > last_seen_at - min_interval:
+        return ClientSessionResolution(record, None, False)
     updated = ClientSession.objects.filter(
         pk=record.pk,
         revoked_at__isnull=True,
+        last_seen_at__lte=last_seen_at - min_interval,
         account__state=AccountIdentity.State.ACTIVE,
         account__user__is_active=True,
     ).update(last_seen_at=last_seen_at)
@@ -131,14 +219,7 @@ def _validate_revocation_reason(reason: str) -> None:
         raise ValueError("Unsupported client session revocation reason")
 
 
-def _locked_client_session(session: ClientSession) -> ClientSession:
-    initial = ClientSession.objects.select_related("account").get(pk=session.pk)
-    user = _locked_user(initial.account.user)
-    _locked_account_identity_for_user(user)
-    return ClientSession.objects.select_for_update().get(pk=session.pk)
-
-
-def _revoke_locked_client_session(*, session: ClientSession, reason: str) -> bool:
+def _revoke_active_client_session(*, session: ClientSession, reason: str) -> bool:
     updated = ClientSession.objects.filter(pk=session.pk, revoked_at__isnull=True).update(
         revoked_at=timezone.now(),
         revocation_reason=reason,
@@ -152,8 +233,8 @@ def _revoke_locked_client_session(*, session: ClientSession, reason: str) -> boo
 @transaction.atomic
 def revoke_client_session(*, session, reason) -> ClientSession:
     _validate_revocation_reason(reason)
-    locked_session = _locked_client_session(session)
-    _revoke_locked_client_session(session=locked_session, reason=reason)
+    current = ClientSession.objects.select_related("account").get(pk=session.pk)
+    _revoke_active_client_session(session=current, reason=reason)
     session.refresh_from_db()
     return session
 
@@ -161,23 +242,19 @@ def revoke_client_session(*, session, reason) -> ClientSession:
 @transaction.atomic
 def revoke_account_sessions(*, account, reason) -> int:
     _validate_revocation_reason(reason)
-    user = _locked_user(account.user)
-    account = _locked_account_identity_for_user(user)
-    sessions = list(
-        ClientSession.objects.select_for_update()
-        .filter(account=account)
-        .order_by("pk")
-    )
+    user = _current_user(account.user)
+    account = _current_account_identity_for_user(user)
+    sessions = list(ClientSession.objects.filter(account=account).order_by("pk"))
     revoked = 0
     for session in sessions:
-        revoked += _revoke_locked_client_session(session=session, reason=reason)
+        revoked += _revoke_active_client_session(session=session, reason=reason)
     return revoked
 
 
 @transaction.atomic
 def disable_account(*, user) -> AccountIdentity:
-    user = _locked_user(user)
-    account = _locked_account_identity_for_user(user)
+    user = _current_user(user)
+    account = _current_account_identity_for_user(user)
     if user.is_active:
         user.is_active = False
         user.save(update_fields=["is_active"])
@@ -190,8 +267,8 @@ def disable_account(*, user) -> AccountIdentity:
 
 @transaction.atomic
 def revoke_account(*, account) -> AccountIdentity:
-    user = _locked_user(account.user)
-    account = _locked_account_identity_for_user(user)
+    user = _current_user(account.user)
+    account = _current_account_identity_for_user(user)
     if account.state == AccountIdentity.State.ACTIVE:
         account.state = AccountIdentity.State.REVOKED
         account.revoked_at = timezone.now()
