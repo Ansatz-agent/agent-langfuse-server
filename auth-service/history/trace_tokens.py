@@ -4,6 +4,7 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import timedelta
+from datetime import timezone as datetime_timezone
 from uuid import UUID
 
 from django.conf import settings
@@ -26,9 +27,22 @@ class TraceTokenIntrospection:
     record: TraceUploadToken | None
     reason: str
     explicit_revocation: bool
+    revocation: TraceTokenRevocation | None = None
+
+
+@dataclass(frozen=True)
+class TraceTokenRevocation:
+    account_id: str
+    session_id: str
+    installation_id: str
+    revoked_at: str
 
 
 class TraceTokenIssuanceError(ValueError):
+    pass
+
+
+class _TraceTokenAuthorityUnavailable(Exception):
     pass
 
 
@@ -122,14 +136,64 @@ def issue_trace_token(
     )
 
 
-def _session_revocation_reason(session: ClientSession) -> str | None:
-    if not session.account.user.is_active:
-        return "account_disabled"
-    if session.account.state == AccountIdentity.State.REVOKED:
-        return "account_revoked"
+def _native_binding(record: TraceUploadToken) -> ClientSession | None:
+    if record.client_session_id is None:
+        missing_relation = ClientSession.objects.filter(
+            credential_digest=record.session_key_digest,
+            installation_id=record.installation_id,
+        ).exists()
+        if missing_relation:
+            raise _TraceTokenAuthorityUnavailable
+        return None
+    session = record.client_session
+    if (
+        record.user_id != session.account.user_id
+        or record.installation_id != session.installation_id
+        or record.session_key_digest != session.credential_digest
+    ):
+        raise _TraceTokenAuthorityUnavailable
+    return session
+
+
+def _revocation_evidence(
+    session: ClientSession,
+) -> tuple[str, TraceTokenRevocation] | None:
+    reason = None
+    revoked_at = None
     if session.revoked_at is not None:
-        return "session_revoked"
-    return None
+        reason = {
+            ClientSession.RevocationReason.SIGNED_OUT: "session_revoked",
+            ClientSession.RevocationReason.SESSION_REVOKED: "session_revoked",
+            ClientSession.RevocationReason.ACCOUNT_DISABLED: "account_disabled",
+            ClientSession.RevocationReason.ACCOUNT_REVOKED: "account_revoked",
+        }.get(session.revocation_reason)
+        revoked_at = session.revoked_at
+        if reason is None:
+            raise _TraceTokenAuthorityUnavailable
+    elif session.account.state == AccountIdentity.State.REVOKED:
+        if (
+            session.account.revocation_reason != ClientSession.RevocationReason.ACCOUNT_REVOKED
+            or session.account.revoked_at is None
+        ):
+            raise _TraceTokenAuthorityUnavailable
+        reason = "account_revoked"
+        revoked_at = session.account.revoked_at
+    elif not session.account.user.is_active:
+        # User has no durable disabled-at field.  The administrative service
+        # transaction records that evidence on every still-active Session;
+        # without it there is no trustworthy timestamp to expose.
+        raise _TraceTokenAuthorityUnavailable
+    else:
+        return None
+    if not timezone.is_aware(revoked_at):
+        raise _TraceTokenAuthorityUnavailable
+    evidence = TraceTokenRevocation(
+        account_id=str(session.account.account_id),
+        session_id=str(session.session_id),
+        installation_id=str(session.installation_id),
+        revoked_at=revoked_at.astimezone(datetime_timezone.utc).isoformat(),
+    )
+    return reason, evidence
 
 
 def introspect_trace_token(value: str) -> TraceTokenIntrospection:
@@ -146,10 +210,15 @@ def introspect_trace_token(value: str) -> TraceTokenIntrospection:
     if record is None:
         return TraceTokenIntrospection(None, "invalid_token", False)
     now = timezone.now()
-    if record.client_session_id is not None:
-        reason = _session_revocation_reason(record.client_session)
-        if reason is not None:
-            return TraceTokenIntrospection(record, reason, True)
+    try:
+        binding = _native_binding(record)
+        revocation = _revocation_evidence(binding) if binding is not None else None
+    except _TraceTokenAuthorityUnavailable:
+        return TraceTokenIntrospection(None, "authentication_unavailable", False)
+    if binding is not None:
+        if revocation is not None:
+            reason, evidence = revocation
+            return TraceTokenIntrospection(record, reason, True, evidence)
     else:
         legacy_account, _ = AccountIdentity.objects.get_or_create(user=record.user)
         if not record.user.is_active:

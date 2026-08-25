@@ -376,13 +376,21 @@ def trace_token_introspect(request):
         return _json_response({"active": False}, status=error.status_code)
     result = introspect_trace_token(payload.get("token"))
     if result.record is None or result.reason != "active":
-        return _json_response(
-            {
-                "active": False,
-                "reason": result.reason,
-                "explicit_revocation": result.explicit_revocation,
-            }
-        )
+        body = {
+            "active": False,
+            "reason": result.reason,
+            "explicit_revocation": result.explicit_revocation,
+        }
+        if result.revocation is not None:
+            body.update(
+                {
+                    "account_id": result.revocation.account_id,
+                    "session_id": result.revocation.session_id,
+                    "installation_id": result.revocation.installation_id,
+                    "revoked_at": result.revocation.revoked_at,
+                }
+            )
+        return _json_response(body)
     record = result.record
     account = (
         record.client_session.account

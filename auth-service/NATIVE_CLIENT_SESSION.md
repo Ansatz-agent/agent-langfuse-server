@@ -229,8 +229,8 @@ For an active native-bound token, `200` returns:
 ```
 
 `platform_user_id` and `platform_username` remain for legacy compatibility;
-`account_id` is the authorization identity.  With a valid internal secret, an
-inactive-token result has exactly:
+`account_id` is the authorization identity.  With a valid internal secret, a
+refreshable inactive-token result has exactly:
 
 ```json
 {
@@ -246,6 +246,37 @@ The native classifications are:
 |---|---|---:|---|
 | refreshable | `token_expired`, `token_rotated`, `token_revoked`, `invalid_token` | `false` | Refresh/retry the Trace credential; do not revoke local authorization. |
 | terminal | `session_revoked`, `account_disabled`, `account_revoked` | `true` | Explicit retained native Session/account evidence. |
+
+A terminal native-bound token includes identity and timestamp evidence taken
+only from its retained `ClientSession` and `AccountIdentity` relationships:
+
+```json
+{
+  "active": false,
+  "reason": "session_revoked",
+  "explicit_revocation": true,
+  "account_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "session_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "installation_id": "11111111-1111-4111-8111-111111111111",
+  "revoked_at": "2026-08-25T00:00:00+00:00"
+}
+```
+
+`revoked_at` is RFC3339 UTC.  A retained Session terminal reason and timestamp
+are immutable authority: a later account disable/revoke does not replace an
+earlier per-Session reason or time.  For a still-active Session, an account
+operation records its reason and timestamp on the Session in the same
+transaction before introspection can expose it.  A missing or inconsistent
+native binding, or an account state without durable timestamp evidence,
+returns `reason: "authentication_unavailable"` with
+`explicit_revocation: false` and no identity fields.  It must not be promoted
+to client revocation.
+
+Legacy Web-session-bound tokens keep their existing active response (including
+`session_id: null`) and their existing three-field inactive response.  They do
+not gain native terminal identity evidence.  Malformed, unknown, expired,
+rotated, or ordinary revoked Trace tokens likewise disclose no account,
+Session, installation, or timestamp fields.
 
 An invalid/missing internal secret returns `403` `{"active":false}`.  Invalid
 introspection JSON returns its request error status with `{"active":false}`.
