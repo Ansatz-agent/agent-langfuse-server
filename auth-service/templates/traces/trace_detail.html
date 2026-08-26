@@ -1,21 +1,42 @@
-{% extends "base.html" %}
+{% extends "traces/app_shell.html" %}
 {% load humanize %}
 {% block title %}Trace {{ trace_id }} · Ansatz{% endblock %}
-{% block content %}
-<section class="trace-heading">
-  <div><p class="eyebrow">TRACE DETAIL</p><h1>完整轨迹</h1><p class="muted">{{ trace_id }}</p></div>
-  <a class="trace-back" href="{% url 'trace-dashboard' %}">返回我的 Trace</a>
-</section>
-<section class="observation-list">
-  {% for observation in observations %}
-    <article>
-      <header>
-        <div><span class="observation-type">{{ observation.type }}</span><h2>{{ observation.name|default:"Observation" }}</h2></div>
-        <div class="observation-meta"><span>{{ observation.tokens|intcomma }} Tokens</span><span>{{ observation.cost_display }}</span><time>{{ observation.startTime }}</time></div>
-      </header>
-      <div class="trace-io-grid"><section><h3>Input / Tool parameters</h3><pre>{{ observation.input_display }}</pre></section><section><h3>Output / Tool result</h3><pre>{{ observation.output_display }}</pre></section></div>
-      {% if observation.metadata_display %}<details><summary>Metadata</summary><pre>{{ observation.metadata_display }}</pre></details>{% endif %}
-    </article>
-  {% endfor %}
-</section>
+{% block trace_tab_class %}is-active{% endblock %}
+{% block body_class %}trace-explorer-page{% endblock %}
+{% block app_body %}
+<main class="trace-explorer-main">
+  <section class="trace-page-heading trace-content-heading">
+    <div><p class="trace-kicker">SESSION / TRACE</p><h1>{{ root_observation.traceName|default:"Agent run" }}</h1><p class="trace-identifier">{{ session_id }} / {{ trace_id }}</p></div>
+    <div class="trace-heading-actions"><span class="trace-status trace-status-{{ summary.status|lower }}">{{ summary.status }}</span><span class="trace-heading-duration">Duration · {{ summary.duration_display }}</span><a class="trace-back-button" href="{% url 'trace-session-detail' session_id %}?days={{ days }}">← Session traces</a></div>
+  </section>
+
+  <section class="trace-fact-strip" aria-label="Trace facts">
+    <span><small>Steps</small><strong>{{ observations|length }}</strong></span><span><small>LLM calls</small><strong>{{ summary.llm_calls }}</strong></span><span><small>Tool calls</small><strong>{{ summary.tool_calls }}</strong></span><span><small>Tokens</small><strong>{{ summary.tokens_display }}</strong></span><span><small>Cost</small><strong>{{ summary.cost_display }}</strong></span><span><small>Started</small><strong>{{ summary.started_at|default:"—" }}</strong></span>
+  </section>
+
+  <section class="trace-explorer-panel trace-content-panel">
+    <header class="trace-explorer-toolbar">
+      <div><h2>Trace inspector</h2><small>Select one step; long content scrolls inside the detail pane</small></div>
+      <div class="trace-view-tabs" role="tablist" aria-label="Trace views"><button type="button" class="is-active" role="tab" aria-selected="true" data-trace-view-target="content">Content</button><button type="button" role="tab" aria-selected="false" data-trace-view-target="performance">Performance</button><button type="button" role="tab" aria-selected="false" data-trace-view-target="raw">Raw</button></div>
+    </header>
+
+    <section class="trace-view is-active" role="tabpanel" data-trace-view="content">
+      <div class="trace-inspector-layout" data-trace-inspector>
+        <nav class="trace-step-rail" aria-label="Trace steps"><strong>Steps</strong><div class="trace-step-scroll">{% for step in steps %}<a class="trace-step-link{% if step.id == selected_step.id %} is-active{% endif %}" href="?days={{ days }}&amp;step={{ step.id|urlencode }}" data-trace-step-link data-step-id="{{ step.id }}" data-fragment-url="{% url 'trace-step-fragment' trace_id step.id %}?days={{ days }}"><span>{% if step.sequence %}{{ step.sequence }}{% else %}O{% endif %}</span><span><strong>{{ step.title }}</strong><small>{{ step.kind_label|upper }}{% if step.observation.model_display %} · {{ step.observation.model_display }}{% endif %}</small></span><span><small>{{ step.observation.duration_display }}</small>{% if step.observation.is_error %}<b>Error</b>{% endif %}</span></a>{% endfor %}</div></nav>
+        <div class="trace-step-panel-host" data-trace-step-panel-host>{% include "traces/_trace_step_panel.html" %}</div>
+      </div>
+    </section>
+
+    <section class="trace-view" role="tabpanel" data-trace-view="performance" hidden>
+      <div class="trace-performance-intro"><div><h2>Execution performance</h2><p>Timing and resource evidence for diagnostic use.</p></div><strong>{{ summary.duration_display }}</strong></div>
+      <div class="trace-filter-bar"><div class="trace-filter-tabs" role="group" aria-label="Filter observations"><button type="button" class="is-active" data-trace-filter="all">All</button><button type="button" data-trace-filter="llm">LLM</button><button type="button" data-trace-filter="tool">Tools</button><button type="button" data-trace-filter="error">Errors</button></div><label class="trace-search"><span aria-hidden="true">⌕</span><input type="search" placeholder="Search steps" aria-label="Search observations" data-trace-search></label></div>
+      <div class="trace-timeline-header" aria-hidden="true"><span>Step</span><span>Execution Timeline</span><span>Duration / usage</span></div>
+      <div class="trace-execution-list">
+        {% for observation in observations %}<details class="trace-execution-row trace-kind-{{ observation.kind }}{% if observation.is_error %} is-error{% endif %}" data-observation-kind="{{ observation.kind }}"><summary><div class="trace-node trace-depth-{{ observation.depth }}"><span class="trace-kind-icon" aria-hidden="true">{% if observation.kind == "llm" %}L{% elif observation.kind == "tool" %}T{% elif observation.kind == "agent" %}A{% elif observation.kind == "internal" %}I{% else %}S{% endif %}</span><span class="trace-node-copy"><strong>{{ observation.name|default:"Observation" }}</strong><small>{{ observation.kind_label }}{% if observation.model_display %} · {{ observation.model_display }}{% endif %}</small></span></div><div class="trace-waterfall" aria-label="{{ observation.name }} position in trace"><svg viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><rect x="{{ observation.offset_percent }}" y="2" width="{{ observation.width_percent }}" height="6" rx="2" /></svg></div><div class="trace-row-metrics"><strong>{{ observation.duration_display }}</strong><small>{{ observation.tokens|intcomma }} tokens · {{ observation.cost_display }}</small></div></summary><div class="trace-observation-detail"><div class="trace-detail-facts"><span><small>Type</small><strong>{{ observation.kind_label }}</strong></span><span><small>Started</small><strong>{{ observation.startTime|default:"—" }}</strong></span><span><small>Ended</small><strong>{{ observation.endTime|default:"—" }}</strong></span><span><small>Observation ID</small><strong>{{ observation.id|default:"—" }}</strong></span></div></div></details>{% endfor %}
+      </div>
+    </section>
+
+    <section class="trace-view" role="tabpanel" data-trace-view="raw" hidden><div class="trace-raw-summary"><header><h2>Raw observation index</h2><p>Select one observation in Content to inspect its complete captured input, output, and metadata without loading every payload at once.</p></header><div class="trace-raw-list">{% for step in steps %}<a href="?days={{ days }}&amp;step={{ step.id|urlencode }}"><span>{{ step.sequence }} · {{ step.kind_label|upper }} · {{ step.title }}</span><span>{{ step.observation.id|default:"root" }}</span><strong>{{ step.observation.duration_display }}</strong></a>{% endfor %}</div></div></section>
+  </section>
+</main>
 {% endblock %}

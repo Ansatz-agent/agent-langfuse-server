@@ -179,6 +179,20 @@ def canonical_model(item_or_name: dict | str | None) -> str:
     return "/".join(parts)
 
 
+def format_cost(value: float | int) -> str:
+    number = float(value)
+    absolute = abs(number)
+    if absolute == 0:
+        return "$0"
+    if absolute < 0.000001:
+        return "<$0.000001"
+    if absolute < 0.01:
+        decimal_places = max(2, -math.floor(math.log10(absolute)) + 1)
+        rendered = f"{number:,.{decimal_places}f}".rstrip("0").rstrip(".")
+        return f"${rendered}"
+    return f"${number:,.2f}"
+
+
 def _compact(value: float | int, *, money: bool = False) -> str:
     number = float(value)
     absolute = abs(number)
@@ -187,8 +201,12 @@ def _compact(value: float | int, *, money: bool = False) -> str:
             rendered = f"{number / threshold:.2f}".rstrip("0").rstrip(".") + suffix
             return f"${rendered}" if money else rendered
     if money:
-        return f"${number:,.6f}" if absolute < 0.01 else f"${number:,.2f}"
+        return format_cost(number)
     return f"{number:,.0f}"
+
+
+def format_tokens(value: float | int) -> str:
+    return _compact(value)
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -368,6 +386,15 @@ def _base_projection(items: list[dict], *, days: int, now: datetime) -> dict:
             token_mix["reasoning_output"],
         ]
     )
+    for key in (
+        "input",
+        "cached_input",
+        "uncached_input",
+        "output",
+        "regular_output",
+        "reasoning_output",
+    ):
+        token_mix[f"{key}_display"] = format_tokens(token_mix[key])
     return {
         "generations": generations,
         "models": models,
@@ -416,12 +443,20 @@ def _trend(daily: list[dict], *, granularity: str, metric: str) -> list[dict]:
             "tokens": value["tokens"],
             "unit_cost": unit_cost or 0,
         }[metric]
-        rows.append({"label": key, **value, "unit_cost": unit_cost, "value": chart_value})
+        rows.append(
+            {
+                "label": key,
+                **value,
+                "tokens_display": format_tokens(value["tokens"]),
+                "unit_cost": unit_cost,
+                "value": chart_value,
+            }
+        )
     maximum = max((row["value"] for row in rows), default=0)
     for row in rows:
         row["percent"] = row["value"] / maximum if maximum else 0
         row["svg_height"] = max(1, row["percent"] * 88) if row["value"] else 0
-        row["svg_y"] = 96 - row["svg_height"]
+        row["svg_y"] = 100 - row["svg_height"]
     return rows
 
 
@@ -466,6 +501,7 @@ def _sessions(items: list[dict], *, query: str) -> list[dict]:
         cost = float(row["cost"])
         row["cost"] = cost
         row["trace_count"] = trace_count
+        row["tokens_display"] = format_tokens(row["tokens"])
         row["cost_display"] = _compact(cost, money=True) if row["has_cost"] else "—"
         haystack = f"{row['id']} {row['name']} {row['latest_trace_id']}".casefold()
         if not needle or needle in haystack:
@@ -545,7 +581,7 @@ def build_dashboard(
             "sessions": len(sessions_all),
             "traces": len(trace_ids),
             "tokens": base["total_tokens"],
-            "tokens_display": _compact(base["total_tokens"]),
+            "tokens_display": format_tokens(base["total_tokens"]),
             "cost": base["total_cost"],
             "has_cost": base["has_cost"],
             "cost_display": (
@@ -614,7 +650,7 @@ def build_model_analytics(
                 "provider": str(item.get("name") or "Unknown provider"),
                 "model": canonical_model(item),
                 "tokens": usage["total"],
-                "tokens_display": _compact(usage["total"]),
+                "tokens_display": format_tokens(usage["total"]),
                 "cost": float(cost),
                 "has_cost": priced,
                 "cost_display": _compact(float(cost), money=True) if priced else "—",
@@ -702,7 +738,7 @@ def build_model_analytics(
                 _compact(scoped["total_cost"], money=True) if scoped["has_cost"] else "—"
             ),
             "tokens": scoped["total_tokens"],
-            "tokens_display": _compact(scoped["total_tokens"]),
+            "tokens_display": format_tokens(scoped["total_tokens"]),
             "cache_hit_rate": scoped["token_mix"]["cache_hit_rate"],
             "top_model_share": top_share,
             "top_model": top["name"] if top else None,

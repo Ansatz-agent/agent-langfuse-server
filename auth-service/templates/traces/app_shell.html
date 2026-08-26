@@ -1,0 +1,45 @@
+{% load static humanize i18n %}
+{% language 'en' %}
+<!doctype html>
+<html lang="{% block document_language %}en{% endblock %}" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Ansatz Analytics{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'history/trace_analytics.css' %}?v=20260827-session-inspector-3">
+  <script defer src="{% static 'history/trace_analytics.js' %}?v=20260827-session-inspector-3"></script>
+</head>
+<body class="analytics-app {% block body_class %}{% endblock %}">
+  <header class="analytics-topbar">
+    <a class="analytics-brand" href="{% url 'trace-dashboard' %}" aria-label="Ansatz Analytics Dashboard">
+      <span class="analytics-brand-mark" aria-hidden="true">A</span>
+      <span><strong>Ansatz Analytics</strong><small>Personal observability</small></span>
+    </a>
+    {% block primary_navigation %}
+      <nav class="analytics-tabs" aria-label="Primary">
+        <a class="{% block dashboard_tab_class %}{% endblock %}" href="{% url 'trace-dashboard' %}?days={{ days|default:30 }}">Dashboard</a>
+        <a class="{% block models_tab_class %}{% endblock %}" href="{% url 'trace-model-analytics' %}?days={{ days|default:30 }}">Model Analytics</a>
+        <a class="{% block trace_tab_class %}{% endblock %}" href="{% url 'trace-index' %}?days={{ days|default:30 }}">Trace</a>
+      </nav>
+    {% endblock %}
+    {% block top_actions %}
+      <div class="analytics-top-actions">
+        {% if date_start and date_end %}
+          <details class="analytics-date-control">
+            <summary><span aria-hidden="true">▣</span><span><small>Date range</small><strong>{{ date_start|date:"M j, Y" }} – {{ date_end|date:"M j, Y" }}</strong></span></summary>
+            <div class="analytics-date-menu"><a href="?days=7">Last 7 days</a><a href="?days=30">Last 30 days</a><a href="?days=90">Last 90 days</a></div>
+          </details>
+        {% endif %}
+        <button class="analytics-icon-button" type="button" data-theme-toggle aria-label="Switch theme" title="Switch theme">◐</button>
+        {% if request.user.is_authenticated %}
+          <div class="analytics-user" title="Signed in as {{ request.user.username }}"><span class="analytics-avatar">{{ request.user.username|first|upper }}</span><span><strong>{{ request.user.username }}</strong><small>Personal usage</small></span></div>
+          {% if date_start and date_end %}<a class="analytics-icon-button" href="?days={{ days }}&amp;metric={{ metric }}&amp;granularity={{ granularity }}&amp;chart={{ chart }}{% if selected_model %}&amp;model={{ selected_model|urlencode }}{% endif %}" aria-label="Refresh analytics" title="Refresh analytics">↻</a>{% endif %}
+          <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="analytics-logout" type="submit">Sign out</button></form>
+        {% endif %}
+      </div>
+    {% endblock %}
+  </header>
+  {% block app_body %}{% endblock %}
+</body>
+</html>
+{% endlanguage %}

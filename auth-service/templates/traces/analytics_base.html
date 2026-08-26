@@ -1,35 +1,5 @@
-{% load static humanize i18n %}
-{% language 'en' %}
-<!doctype html>
-<html lang="en" data-theme="light">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Ansatz Analytics{% endblock %}</title>
-  <link rel="stylesheet" href="{% static 'history/trace_analytics.css' %}">
-  <script defer src="{% static 'history/trace_analytics.js' %}"></script>
-</head>
-<body class="analytics-app">
-  <header class="analytics-topbar">
-    <a class="analytics-brand" href="{% url 'trace-dashboard' %}" aria-label="Ansatz Analytics Dashboard">
-      <span class="analytics-brand-mark" aria-hidden="true">A</span>
-      <span><strong>Ansatz Analytics</strong><small>Personal observability</small></span>
-    </a>
-    <nav class="analytics-tabs" aria-label="Primary">
-      <a class="{% block dashboard_tab_class %}{% endblock %}" href="{% url 'trace-dashboard' %}?days={{ days }}">Dashboard</a>
-      <a class="{% block models_tab_class %}{% endblock %}" href="{% url 'trace-model-analytics' %}?days={{ days }}">Model Analytics</a>
-    </nav>
-    <div class="analytics-top-actions">
-      <details class="analytics-date-control">
-        <summary><span aria-hidden="true">▣</span><span><small>Date range</small><strong>{{ date_start|date:"M j, Y" }} – {{ date_end|date:"M j, Y" }}</strong></span></summary>
-        <div class="analytics-date-menu"><a href="?days=7">Last 7 days</a><a href="?days=30">Last 30 days</a><a href="?days=90">Last 90 days</a></div>
-      </details>
-      <button class="analytics-icon-button" type="button" data-theme-toggle aria-label="Switch theme" title="Switch theme">◐</button>
-      <div class="analytics-user" title="Signed in as {{ request.user.username }}"><span class="analytics-avatar">{{ request.user.username|first|upper }}</span><span><strong>{{ request.user.username }}</strong><small>Personal usage</small></span></div>
-      <a class="analytics-icon-button" href="?days={{ days }}&amp;metric={{ metric }}&amp;granularity={{ granularity }}&amp;chart={{ chart }}{% if selected_model %}&amp;model={{ selected_model|urlencode }}{% endif %}" aria-label="Refresh analytics" title="Refresh analytics">↻</a>
-      <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="analytics-logout" type="submit">Sign out</button></form>
-    </div>
-  </header>
+{% extends "traces/app_shell.html" %}
+{% block app_body %}
   <div class="analytics-layout">
     <aside class="analytics-sidebar" aria-label="Dashboard Controls" data-filter-rail>
       <div class="analytics-sidebar-title"><span>Filters</span><button type="button" data-filter-toggle aria-expanded="true" aria-label="Minimize filters">‹</button></div>
@@ -40,6 +10,4 @@
       {% block analytics_content %}{% endblock %}
     </main>
   </div>
-</body>
-</html>
-{% endlanguage %}
+{% endblock %}
