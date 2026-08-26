@@ -1,0 +1,28 @@
+{% load humanize %}
+<article class="trace-selected-step trace-selected-{{ selected_step.kind }}" data-trace-step-panel data-selected-step-id="{{ selected_step.id }}">
+  <header class="trace-selected-step-header">
+    <div><span class="trace-step-sequence">{% if selected_step.sequence %}{{ selected_step.sequence }}{% else %}O{% endif %}</span><div><small>{{ selected_step.kind_label|upper }}</small><h2>{{ selected_step.title }}</h2></div></div>
+    <div class="trace-selected-step-meta">{% if selected_step.observation.model_display %}<span>{{ selected_step.observation.model_display }}</span>{% endif %}<span>{{ selected_step.observation.duration_display }}</span>{% if selected_step.observation.tokens %}<span>{{ selected_step.observation.tokens|intcomma }} tokens</span>{% endif %}{% if selected_step.observation.is_error %}<strong>Error</strong>{% endif %}</div>
+  </header>
+
+  {% if selected_step.kind == "overview" %}
+    <div class="trace-overview-grid">
+      <section><h3>User request</h3><div class="trace-payload-scroll"><pre>{{ selected_step.input_display|default:"No root request captured." }}</pre></div></section>
+      <section><h3>Final response</h3><div class="trace-payload-scroll"><pre>{{ selected_step.output_display|default:"No root response captured." }}</pre></div></section>
+    </div>
+  {% elif selected_step.kind == "tool_exchange" %}
+    <div class="trace-tool-inspector">
+      <section><h3>Tool arguments</h3><div class="trace-payload-scroll"><pre>{{ selected_step.input_display|default:"No arguments captured." }}</pre></div></section>
+      <section><h3>Tool result</h3><div class="trace-payload-scroll"><pre>{{ selected_step.output_display|default:"No result captured." }}</pre></div></section>
+    </div>
+    <details class="trace-step-metadata"><summary>Metadata</summary><div class="trace-payload-scroll"><pre>{{ selected_step.metadata_display|default:"No metadata captured." }}</pre></div></details>
+  {% else %}
+    <div class="trace-step-detail-tabs" role="tablist" aria-label="Selected step content">
+      <button type="button" data-step-detail-target="input">Input</button><button type="button" class="is-active" data-step-detail-target="output">Output</button><button type="button" data-step-detail-target="metadata">Metadata</button>
+      <button type="button" class="trace-wrap-toggle" data-trace-wrap aria-pressed="true">Wrap lines</button><button type="button" class="trace-copy-button" data-trace-copy>Copy</button>
+    </div>
+    <section class="trace-step-detail-view" data-step-detail="input" hidden><h3>Captured input</h3><div class="trace-payload-scroll"><pre>{{ selected_step.input_display|default:"No input captured." }}</pre></div></section>
+    <section class="trace-step-detail-view is-active" data-step-detail="output"><h3>Response</h3><div class="trace-payload-scroll"><pre>{{ selected_step.output_display|default:"No output captured." }}</pre></div></section>
+    <section class="trace-step-detail-view" data-step-detail="metadata" hidden><h3>Metadata</h3><div class="trace-payload-scroll"><pre>{{ selected_step.metadata_display|default:"No metadata captured." }}</pre></div></section>
+  {% endif %}
+</article>

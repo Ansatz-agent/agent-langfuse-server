@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 
 from django.test import SimpleTestCase
 
-from history.trace_analytics import build_dashboard, build_model_analytics
+from history.trace_analytics import (
+    build_dashboard,
+    build_model_analytics,
+    format_cost,
+    format_tokens,
+)
 
 
 NOW = datetime(2026, 8, 26, 12, tzinfo=timezone.utc)
@@ -45,6 +50,16 @@ def observation(
 
 
 class TraceAnalyticsTests(SimpleTestCase):
+    def test_sub_cent_costs_use_two_significant_digits(self):
+        self.assertEqual(format_cost(0.000722), "$0.00072")
+        self.assertEqual(format_cost(0.001234), "$0.0012")
+
+    def test_token_counts_advance_through_k_m_and_b_units(self):
+        self.assertEqual(format_tokens(999), "999")
+        self.assertEqual(format_tokens(1_000), "1K")
+        self.assertEqual(format_tokens(1_250_000), "1.25M")
+        self.assertEqual(format_tokens(2_500_000_000), "2.5B")
+
     def setUp(self):
         self.items = [
             observation(
@@ -120,6 +135,51 @@ class TraceAnalyticsTests(SimpleTestCase):
         self.assertEqual(result["models"][0]["priced_calls"], 1)
         self.assertEqual(result["models"][1]["cost"], 0.0)
         self.assertEqual(result["models"][1]["priced_calls"], 1)
+
+    def test_cost_display_does_not_round_zero_or_tiny_costs_to_six_zeroes(self):
+        result = build_dashboard(
+            [
+                observation(
+                    "zero-cost",
+                    model="nvidia/nemotron-3-ultra-550b-a55b",
+                    usage={"total": 100},
+                    total_cost=0,
+                ),
+                observation(
+                    "tiny-cost",
+                    model="openai/gpt-5.5",
+                    usage={"total": 100},
+                    total_cost=0.0000004,
+                    trace_id="trace-b",
+                ),
+            ],
+            days=30,
+            now=NOW,
+            query="",
+            metric="cost",
+            granularity="day",
+            chart="bar",
+        )
+
+        costs = {model["name"]: model["cost_display"] for model in result["models"]}
+        self.assertEqual(costs["nvidia/nemotron-3-ultra-550b-a55b"], "$0")
+        self.assertEqual(costs["openai/gpt-5.5"], "<$0.000001")
+
+    def test_nonzero_trend_bars_end_on_the_shared_svg_baseline(self):
+        result = build_dashboard(
+            self.items,
+            days=30,
+            now=NOW,
+            query="",
+            metric="cost",
+            granularity="week",
+            chart="bar",
+        )
+
+        nonzero_rows = [row for row in result["trend"] if row["svg_height"]]
+        self.assertTrue(nonzero_rows)
+        for row in nonzero_rows:
+            self.assertEqual(row["svg_y"] + row["svg_height"], 100)
 
     def test_model_analytics_preserves_missing_price_and_latency_evidence(self):
         result = build_model_analytics(

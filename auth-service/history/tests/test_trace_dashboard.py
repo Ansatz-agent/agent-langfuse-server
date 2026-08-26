@@ -21,6 +21,7 @@ def observation(
     user_id: str,
     session_id: str = "session-a",
     start_time: str = "2026-08-24T06:00:00Z",
+    end_time: str = "2026-08-24T06:00:02Z",
     name: str = "hermes.turn",
     observation_type: str = "SPAN",
     root: bool = True,
@@ -29,24 +30,27 @@ def observation(
     cost: float = 0,
     input_value=None,
     output_value=None,
+    parent_observation_id: str | None = None,
+    metadata: dict | None = None,
+    level: str = "DEFAULT",
 ):
     return {
         "id": observation_id,
         "traceId": trace_id,
         "startTime": start_time,
-        "endTime": "2026-08-24T06:00:02Z",
+        "endTime": end_time,
         "projectId": "project",
-        "parentObservationId": None if root else "root-observation",
+        "parentObservationId": None if root else (parent_observation_id or "root-observation"),
         "type": observation_type,
         "isRootObservation": root,
         "name": name,
-        "level": "DEFAULT",
+        "level": level,
         "statusMessage": None,
         "userId": user_id,
         "sessionId": session_id,
         "input": input_value,
         "output": output_value,
-        "metadata": {"username": "alice"},
+        "metadata": metadata if metadata is not None else {"username": "alice"},
         "providedModelName": model,
         "usageDetails": {"total": tokens} if tokens else {},
         "costDetails": {"total": cost} if cost else {},
@@ -377,6 +381,271 @@ class TraceDashboardViewTests(TestCase):
         self.assertContains(response, 'aria-label="Model usage trend"', html=False)
         self.assertEqual(response.context["chart"], "bar")
 
+    def test_trace_index_is_owner_scoped_and_groups_rows_by_session(self):
+        fake = FakeLangfuseClient(
+            [
+                observation(
+                    observation_id="owned-root",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    session_id="session-owned",
+                    input_value="Summarize the quarterly report",
+                    output_value="Revenue increased year over year",
+                ),
+                observation(
+                    observation_id="owned-tool",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    session_id="session-owned",
+                    root=False,
+                    name="document_search",
+                    metadata={"nemo_relay.scope_type": "tool"},
+                ),
+                observation(
+                    observation_id="owned-second-root",
+                    trace_id="trace-owned-second",
+                    user_id=self.user.username,
+                    session_id="session-owned",
+                    start_time="2026-08-24T07:00:00Z",
+                    end_time="2026-08-24T07:00:03Z",
+                    input_value="Follow-up question",
+                    output_value="Latest session response",
+                ),
+                observation(
+                    observation_id="unassigned-root",
+                    trace_id="trace-unassigned",
+                    user_id=self.user.username,
+                    session_id=None,
+                    start_time="2026-08-23T07:00:00Z",
+                    input_value="Unsessioned request",
+                    output_value="Unsessioned response",
+                ),
+                observation(
+                    observation_id="foreign-root",
+                    trace_id="trace-foreign",
+                    user_id=self.other.username,
+                    input_value="foreign secret prompt",
+                ),
+            ]
+        )
+
+        with patch("history.trace_views.get_langfuse_client", return_value=fake):
+            response = self.client.get(reverse("trace-index"), {"days": "30"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fake.calls[0]["user_id"], self.user.username)
+        self.assertTrue(fake.calls[0]["include_io"])
+        self.assertEqual(len(response.context["sessions"]), 2)
+        owned_session = response.context["sessions"][0]
+        self.assertEqual(owned_session["id"], "session-owned")
+        self.assertEqual(owned_session["trace_count"], 2)
+        self.assertEqual(owned_session["latest_response_preview"], "Latest session response")
+        self.assertContains(response, "Trace")
+        self.assertContains(response, "Summarize the quarterly report")
+        self.assertContains(response, "Latest session response")
+        self.assertContains(response, "document_search")
+        self.assertContains(response, "Unsessioned traces")
+        self.assertContains(
+            response, reverse("trace-session-detail", args=["session-owned"])
+        )
+        self.assertNotContains(response, "foreign secret prompt")
+        self.assertNotContains(response, "trace-foreign")
+
+    def test_legacy_trace_runs_route_redirects_to_sessions_with_bounded_query(self):
+        response = self.client.get(
+            reverse("trace-runs-legacy"),
+            {"days": "90", "q": "tool", "userId": self.other.username, "extra": "drop"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "/traces/sessions/?days=90&q=tool")
+
+    def test_trace_index_unavailable_is_generic(self):
+        fake = FakeLangfuseClient(error=LangfuseUnavailable("private upstream detail"))
+        with patch("history.trace_views.get_langfuse_client", return_value=fake):
+            response = self.client.get(reverse("trace-index"))
+
+        self.assertEqual(response.status_code, 503)
+        self.assertContains(response, "Trace 服务暂时不可用", status_code=503)
+        self.assertNotContains(response, "private upstream detail", status_code=503)
+
+    def test_trace_detail_uses_content_first_semantic_blocks(self):
+        owned = FakeLangfuseClient(
+            [
+                observation(
+                    observation_id="root-observation",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    start_time="2026-08-24T06:00:00Z",
+                    end_time="2026-08-24T06:00:12Z",
+                    input_value="Explain the result",
+                    output_value="The task is complete",
+                ),
+                observation(
+                    observation_id="generation-one",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    root=False,
+                    start_time="2026-08-24T06:00:01Z",
+                    end_time="2026-08-24T06:00:04Z",
+                    name="nvidia",
+                    observation_type="GENERATION",
+                    model="openai/gpt-5.5",
+                    input_value={"messages": [{"role": "user", "content": "Explain the result"}]},
+                    output_value={"content": "I will inspect it"},
+                ),
+                observation(
+                    observation_id="tool-one",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    root=False,
+                    start_time="2026-08-24T06:00:04Z",
+                    end_time="2026-08-24T06:00:07Z",
+                    name="terminal",
+                    input_value={"command": "echo complete"},
+                    output_value={"stdout": "complete", "exit_code": 0},
+                    metadata={"nemo_relay.scope_type": "tool"},
+                ),
+            ]
+        )
+
+        with patch("history.trace_views.get_langfuse_client", return_value=owned):
+            response = self.client.get(
+                reverse("trace-detail", args=["trace-owned"]), {"days": "7"}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["days"], 7)
+        self.assertEqual(
+            [block["kind"] for block in response.context["content_blocks"]],
+            ["user_request", "model_exchange", "tool_exchange", "final_response"],
+        )
+        self.assertEqual(response.context["selected_step"]["id"], "overview")
+        self.assertEqual(
+            [step["id"] for step in response.context["steps"]],
+            ["overview", "generation-one", "tool-one"],
+        )
+        self.assertContains(response, "Content")
+        self.assertContains(response, "Performance")
+        self.assertContains(response, "User request")
+        self.assertContains(response, "MODEL RESPONSE")
+        self.assertContains(response, "TOOL CALL")
+        self.assertContains(response, "Final response")
+        self.assertContains(response, 'class="trace-selected-step ', count=1, html=False)
+        self.assertNotContains(response, "echo complete")
+
+        with patch("history.trace_views.get_langfuse_client", return_value=owned):
+            tool_response = self.client.get(
+                reverse("trace-detail", args=["trace-owned"]), {"step": "tool-one"}
+            )
+        self.assertEqual(tool_response.status_code, 200)
+        self.assertEqual(tool_response.context["selected_step"]["id"], "tool-one")
+        self.assertContains(tool_response, "Tool arguments")
+        self.assertContains(tool_response, "Tool result")
+        self.assertContains(tool_response, "echo complete")
+
+    def test_trace_step_fragment_is_owner_scoped_selected_and_escaped(self):
+        owned = FakeLangfuseClient(
+            [
+                observation(
+                    observation_id="root-observation",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    input_value="request",
+                    output_value="response",
+                ),
+                observation(
+                    observation_id="tool-one",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    root=False,
+                    name="terminal",
+                    input_value={"command": "<script>alert(1)</script>"},
+                    output_value={"stdout": "safe"},
+                    metadata={"nemo_relay.scope_type": "tool"},
+                ),
+            ]
+        )
+        with patch("history.trace_views.get_langfuse_client", return_value=owned):
+            response = self.client.get(
+                reverse("trace-step-fragment", args=["trace-owned", "tool-one"])
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Tool arguments")
+        self.assertContains(response, "&lt;script&gt;alert(1)&lt;/script&gt;")
+        self.assertNotContains(response, "<script>alert(1)</script>")
+        self.assertNotContains(response, "analytics-topbar")
+        self.assertEqual(owned.calls[0]["user_id"], self.user.username)
+        self.assertEqual(owned.calls[0]["trace_id"], "trace-owned")
+
+        foreign = FakeLangfuseClient(
+            [
+                observation(
+                    observation_id="foreign-tool",
+                    trace_id="trace-foreign",
+                    user_id=self.other.username,
+                )
+            ]
+        )
+        with patch("history.trace_views.get_langfuse_client", return_value=foreign):
+            denied = self.client.get(
+                reverse("trace-step-fragment", args=["trace-foreign", "foreign-tool"])
+            )
+        self.assertEqual(denied.status_code, 404)
+
+    def test_long_trace_renders_only_the_selected_payload(self):
+        items = [
+            observation(
+                observation_id="root-observation",
+                trace_id="trace-long",
+                user_id=self.user.username,
+                input_value="root request",
+                output_value="root response",
+                end_time="2026-08-24T06:02:00Z",
+            )
+        ]
+        for index in range(1, 51):
+            items.append(
+                observation(
+                    observation_id=f"step-{index}",
+                    trace_id="trace-long",
+                    user_id=self.user.username,
+                    root=False,
+                    name=f"model-step-{index}",
+                    observation_type="GENERATION",
+                    model="openai/gpt-5.5",
+                    input_value={"content": f"private-input-{index}"},
+                    output_value={"content": f"private-output-{index}"},
+                    parent_observation_id="root-observation",
+                )
+            )
+        fake = FakeLangfuseClient(items)
+
+        with patch("history.trace_views.get_langfuse_client", return_value=fake):
+            overview = self.client.get(reverse("trace-detail", args=["trace-long"]))
+        self.assertEqual(overview.status_code, 200)
+        self.assertEqual(len(overview.context["steps"]), 51)
+        self.assertContains(overview, "root request")
+        self.assertNotContains(overview, "private-input-40")
+        self.assertNotContains(overview, "private-output-40")
+
+        with patch("history.trace_views.get_langfuse_client", return_value=fake):
+            selected = self.client.get(
+                reverse("trace-detail", args=["trace-long"]), {"step": "step-40"}
+            )
+        self.assertEqual(selected.status_code, 200)
+        self.assertEqual(selected.context["selected_step"]["id"], "step-40")
+        self.assertContains(selected, "private-output-40")
+        self.assertNotContains(selected, "private-output-39")
+        self.assertNotContains(selected, "private-output-41")
+
+        with patch("history.trace_views.get_langfuse_client", return_value=fake):
+            invalid = self.client.get(
+                reverse("trace-detail", args=["trace-long"]), {"step": "not-owned"}
+            )
+        self.assertEqual(invalid.context["selected_step"]["id"], "overview")
+
     def test_trace_detail_is_owner_only_and_escapes_full_payload(self):
         owned = FakeLangfuseClient(
             [
@@ -411,6 +680,167 @@ class TraceDashboardViewTests(TestCase):
         with patch("history.trace_views.get_langfuse_client", return_value=foreign):
             denied = self.client.get(reverse("trace-detail", args=["trace-foreign"]))
         self.assertEqual(denied.status_code, 404)
+
+    def test_trace_detail_uses_light_shell_and_content_first_execution_views(self):
+        owned = FakeLangfuseClient(
+            [
+                observation(
+                    observation_id="root-observation",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    start_time="2026-08-24T06:00:00Z",
+                    end_time="2026-08-24T06:00:12Z",
+                    input_value="Explain the result",
+                    output_value="The task is complete",
+                ),
+                observation(
+                    observation_id="generation-one",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    root=False,
+                    start_time="2026-08-24T06:00:01Z",
+                    end_time="2026-08-24T06:00:04Z",
+                    name="nvidia",
+                    observation_type="GENERATION",
+                    model="openai/gpt-5.5",
+                    tokens=120,
+                    cost=0.012,
+                    input_value={"messages": [{"role": "user", "content": "Explain the result"}]},
+                    output_value={"content": "I will inspect it"},
+                    metadata={"nemo_relay.scope_type": "llm", "provider": "nvidia"},
+                ),
+                observation(
+                    observation_id="tool-one",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    root=False,
+                    start_time="2026-08-24T06:00:04Z",
+                    end_time="2026-08-24T06:00:07Z",
+                    name="terminal",
+                    input_value={"command": "echo complete"},
+                    output_value={"stdout": "complete", "exit_code": 0},
+                    metadata={"nemo_relay.scope_type": "tool", "tool_call_id": "call-1"},
+                ),
+                observation(
+                    observation_id="generation-two",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    root=False,
+                    start_time="2026-08-24T06:00:07Z",
+                    end_time="2026-08-24T06:00:12Z",
+                    name="nvidia",
+                    observation_type="GENERATION",
+                    model="openai/gpt-5.5",
+                    tokens=80,
+                    cost=0.008,
+                    output_value={"content": "The task is complete"},
+                    metadata={"nemo_relay.scope_type": "llm", "provider": "nvidia"},
+                    level="ERROR",
+                ),
+            ]
+        )
+
+        with patch("history.trace_views.get_langfuse_client", return_value=owned):
+            response = self.client.get(reverse("trace-detail", args=["trace-owned"]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "/auth/static/history/trace_analytics.css")
+        self.assertNotContains(response, "/auth/static/history/app.css")
+        self.assertContains(response, 'class="analytics-topbar"', html=False)
+        for label in (
+            "Duration · 12.00s",
+            "Steps",
+            "LLM calls",
+            "Tool calls",
+            "Tokens",
+            "Cost",
+            "Content",
+            "Performance",
+            "Raw",
+            "Execution Timeline",
+            "terminal",
+            "3.00s",
+        ):
+            self.assertContains(response, label)
+        self.assertEqual(response.context["summary"]["llm_calls"], 2)
+        self.assertEqual(response.context["summary"]["tool_calls"], 1)
+        self.assertEqual(response.context["summary"]["errors"], 1)
+        self.assertEqual(response.context["summary"]["duration_display"], "12.00s")
+        self.assertEqual(response.context["observations"][2]["offset_percent"], 33.333)
+        self.assertEqual(response.context["observations"][2]["width_percent"], 25.0)
+
+    def test_session_detail_is_a_compact_trace_list_without_full_payloads(self):
+        owned = FakeLangfuseClient(
+            [
+                observation(
+                    observation_id="root",
+                    trace_id="trace-owned",
+                    user_id=self.user.username,
+                    session_id="session-owned",
+                    start_time="2026-08-24T06:00:00Z",
+                    end_time="2026-08-24T06:00:09Z",
+                    input_value="question",
+                    output_value="answer",
+                ),
+                observation(
+                    observation_id="root-second",
+                    trace_id="trace-owned-second",
+                    user_id=self.user.username,
+                    session_id="session-owned",
+                    start_time="2026-08-24T07:00:00Z",
+                    end_time="2026-08-24T07:00:03Z",
+                    input_value="follow-up",
+                    output_value="second answer",
+                ),
+            ]
+        )
+        with patch("history.trace_views.get_langfuse_client", return_value=owned):
+            response = self.client.get(
+                reverse("trace-session-detail", args=["session-owned"])
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "/auth/static/history/trace_analytics.css")
+        self.assertNotContains(response, "/auth/static/history/app.css")
+        self.assertContains(response, "Session traces")
+        self.assertContains(response, "All sessions")
+        self.assertContains(response, "9.00s")
+        self.assertContains(response, "question")
+        self.assertContains(response, "second answer")
+        self.assertContains(response, "Inspect trace", count=2)
+        self.assertNotContains(response, "<pre", html=False)
+        self.assertEqual(
+            [trace["id"] for trace in response.context["traces"]],
+            ["trace-owned", "trace-owned-second"],
+        )
+
+    def test_unsessioned_bucket_opens_only_observations_without_session_id(self):
+        owned = FakeLangfuseClient(
+            [
+                observation(
+                    observation_id="unassigned",
+                    trace_id="trace-unassigned",
+                    user_id=self.user.username,
+                    session_id=None,
+                    input_value="unassigned content",
+                ),
+                observation(
+                    observation_id="assigned",
+                    trace_id="trace-assigned",
+                    user_id=self.user.username,
+                    session_id="session-owned",
+                    input_value="assigned secret",
+                ),
+            ]
+        )
+        with patch("history.trace_views.get_langfuse_client", return_value=owned):
+            response = self.client.get(
+                reverse("trace-session-detail", args=["__unsessioned__"])
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "unassigned content")
+        self.assertNotContains(response, "assigned secret")
 
     def test_session_detail_is_owner_only(self):
         foreign = FakeLangfuseClient(

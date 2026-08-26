@@ -52,6 +52,16 @@ urlpatterns = [
         name="trace-model-analytics",
     ),
     path(
+        "traces/sessions/",
+        trace_views.trace_index,
+        name="trace-index",
+    ),
+    path(
+        "traces/runs/",
+        trace_views.trace_runs_legacy,
+        name="trace-runs-legacy",
+    ),
+    path(
         "traces/session/<str:session_id>/",
         trace_views.session_detail,
         name="trace-session-detail",
@@ -60,6 +70,11 @@ urlpatterns = [
         "traces/trace/<str:trace_id>/",
         trace_views.trace_detail,
         name="trace-detail",
+    ),
+    path(
+        "traces/trace/<str:trace_id>/step/<str:observation_id>/",
+        trace_views.trace_step_fragment,
+        name="trace-step-fragment",
     ),
     path("", include("history.urls")),
 ]

@@ -1,3 +1,4 @@
-{% extends "base.html" %}
+{% extends "traces/app_shell.html" %}
 {% block title %}Trace 暂不可用 · Ansatz{% endblock %}
-{% block content %}<section class="trace-unavailable"><h1>Trace 服务暂时不可用</h1><p>数据没有回退到未授权查询。请稍后刷新重试。</p></section>{% endblock %}
+{% block dashboard_tab_class %}is-active{% endblock %}
+{% block app_body %}<main class="trace-explorer-main"><section class="analytics-unavailable"><strong>Trace 服务暂时不可用</strong><span>数据没有回退到未授权查询。请稍后刷新重试。</span></section></main>{% endblock %}
