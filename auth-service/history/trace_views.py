@@ -66,8 +66,10 @@ def _pretty(value) -> str:
         return str(value)
 
 
-def _owned(items: list[dict], user_id: str) -> list[dict]:
-    return [item for item in items if str(item.get("userId")) == user_id]
+def _owned(items: list[dict], langfuse_user_id: str) -> list[dict]:
+    return [
+        item for item in items if str(item.get("userId")) == langfuse_user_id
+    ]
 
 
 def aggregate_dashboard(items: list[dict], *, days: int, query: str) -> dict:
@@ -103,8 +105,9 @@ def _client_list(
         now = timezone.now()
         from_time = (now - timedelta(days=days)).isoformat()
         to_time = now.isoformat()
+    langfuse_user_id = request.user.get_username()
     items = get_langfuse_client().list_observations(
-        user_id=str(request.user.pk),
+        user_id=langfuse_user_id,
         days=days,
         from_time=from_time,
         to_time=to_time,
@@ -112,7 +115,7 @@ def _client_list(
         trace_id=trace_id,
         include_io=include_io,
     )
-    return days, _owned(items, str(request.user.pk))
+    return days, _owned(items, langfuse_user_id)
 
 
 @hermes_session_required

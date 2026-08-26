@@ -203,13 +203,13 @@ class TraceDashboardViewTests(TestCase):
                 observation(
                     observation_id="owned",
                     trace_id="trace-owned",
-                    user_id=str(self.user.pk),
+                    user_id=self.user.username,
                     input_value="owned input",
                 ),
                 observation(
                     observation_id="foreign",
                     trace_id="trace-foreign",
-                    user_id=str(self.other.pk),
+                    user_id=self.other.username,
                     input_value="foreign secret",
                 ),
             ]
@@ -217,11 +217,11 @@ class TraceDashboardViewTests(TestCase):
         with patch("history.trace_views.get_langfuse_client", return_value=fake):
             response = self.client.get(
                 reverse("trace-dashboard"),
-                {"days": "30", "userId": str(self.other.pk)},
+                {"days": "30", "userId": self.other.username},
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(fake.calls[0]["user_id"], str(self.user.pk))
+        self.assertEqual(fake.calls[0]["user_id"], self.user.username)
         self.assertContains(response, "trace-owned")
         self.assertNotContains(response, "foreign secret")
         self.assertNotContains(response, "trace-foreign")
@@ -232,14 +232,14 @@ class TraceDashboardViewTests(TestCase):
                 observation(
                     observation_id="root",
                     trace_id="trace-owned",
-                    user_id=str(self.user.pk),
+                    user_id=self.user.username,
                     input_value="private prompt must not appear",
                     output_value="private response must not appear",
                 ),
                 observation(
                     observation_id="generation",
                     trace_id="trace-owned",
-                    user_id=str(self.user.pk),
+                    user_id=self.user.username,
                     root=False,
                     observation_type="GENERATION",
                     model="openai/gpt-5.5",
@@ -300,7 +300,7 @@ class TraceDashboardViewTests(TestCase):
         owned = observation(
             observation_id="owned-generation",
             trace_id="trace-owned",
-            user_id=str(self.user.pk),
+            user_id=self.user.username,
             observation_type="GENERATION",
             model="openai/gpt-5.5",
             tokens=120,
@@ -309,7 +309,7 @@ class TraceDashboardViewTests(TestCase):
         foreign = observation(
             observation_id="foreign-generation",
             trace_id="trace-foreign",
-            user_id=str(self.other.pk),
+            user_id=self.other.username,
             observation_type="GENERATION",
             model="foreign-secret-model",
             tokens=999,
@@ -326,12 +326,12 @@ class TraceDashboardViewTests(TestCase):
                     "granularity": "quarter",
                     "chart": "pie",
                     "model": "foreign-secret-model",
-                    "userId": str(self.other.pk),
+                    "userId": self.other.username,
                 },
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(fake.calls[0]["user_id"], str(self.user.pk))
+        self.assertEqual(fake.calls[0]["user_id"], self.user.username)
         self.assertEqual(fake.calls[0]["days"], 30)
         self.assertFalse(fake.calls[0]["include_io"])
         self.assertContains(response, "Model Analytics")
@@ -358,7 +358,7 @@ class TraceDashboardViewTests(TestCase):
                 observation(
                     observation_id="generation",
                     trace_id="trace-owned",
-                    user_id=str(self.user.pk),
+                    user_id=self.user.username,
                     observation_type="GENERATION",
                     model="openai/gpt-5.5",
                     tokens=120,
@@ -383,7 +383,7 @@ class TraceDashboardViewTests(TestCase):
                 observation(
                     observation_id="root",
                     trace_id="trace-owned",
-                    user_id=str(self.user.pk),
+                    user_id=self.user.username,
                     input_value="<script>alert(1)</script>",
                     output_value={"answer": "完整回答"},
                 )
@@ -396,7 +396,7 @@ class TraceDashboardViewTests(TestCase):
         self.assertContains(response, "完整回答")
         self.assertContains(response, "&lt;script&gt;alert(1)&lt;/script&gt;")
         self.assertNotContains(response, "<script>alert(1)</script>")
-        self.assertEqual(owned.calls[0]["user_id"], str(self.user.pk))
+        self.assertEqual(owned.calls[0]["user_id"], self.user.username)
         self.assertEqual(owned.calls[0]["trace_id"], "trace-owned")
 
         foreign = FakeLangfuseClient(
@@ -404,7 +404,7 @@ class TraceDashboardViewTests(TestCase):
                 observation(
                     observation_id="foreign",
                     trace_id="trace-foreign",
-                    user_id=str(self.other.pk),
+                    user_id=self.other.username,
                 )
             ]
         )
@@ -418,7 +418,7 @@ class TraceDashboardViewTests(TestCase):
                 observation(
                     observation_id="foreign",
                     trace_id="trace-foreign",
-                    user_id=str(self.other.pk),
+                    user_id=self.other.username,
                     session_id="foreign-session",
                 )
             ]
