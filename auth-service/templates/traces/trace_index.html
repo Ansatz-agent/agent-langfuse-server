@@ -6,17 +6,13 @@
 <main class="trace-index-main">
   <section class="trace-index-heading">
     <div><span class="trace-kicker">AGENT TRACE</span><h1>Trace</h1><p>Start with a session, then inspect its traces and steps.</p></div>
-    <form class="trace-index-search" method="get"><input type="hidden" name="days" value="{{ days }}"><input name="q" value="{{ query }}" maxlength="80" placeholder="Search session, request, response, tool, model, or trace ID" aria-label="Search sessions"><button type="submit">Search</button></form>
+    <form class="trace-index-search" method="get"><input type="hidden" name="days" value="{{ days }}"><input name="q" value="{{ query }}" maxlength="80" placeholder="Search session, tool, model, or trace ID" aria-label="Search sessions"><button type="submit">Search</button></form>
   </section>
   <section class="trace-index-summary" aria-label="Session index summary"><strong>{{ sessions|length }}</strong><span>owned sessions in the selected range</span></section>
   <section class="trace-index-list" aria-label="Agent sessions">
     {% for session in sessions %}
       <article class="trace-index-row trace-session-index-row" data-session-id="{{ session.id }}">
         <header><div><span class="trace-status {% if session.errors %}trace-status-error{% else %}trace-status-complete{% endif %}">{% if session.errors %}{{ session.errors }} errors{% else %}Complete{% endif %}</span><div><h2>{{ session.name }}</h2><small>{{ session.id }}</small></div></div><time>{{ session.last_activity }}</time></header>
-        <div class="trace-index-copy">
-          <section><h3>First request</h3><p>{{ session.first_request_preview|default:"No root input captured."|truncatechars:360 }}</p></section>
-          <section><h3>Latest response</h3><p>{{ session.latest_response_preview|default:"No root output captured."|truncatechars:360 }}</p></section>
-        </div>
         <footer>
           <div class="trace-index-tags"><span>{{ session.trace_count }} traces</span><span>{{ session.step_count }} steps</span><span>{{ session.models|join:", "|default:"No model" }}</span><span>{% if session.tools %}{{ session.tools|join:", " }}{% else %}No tools{% endif %}</span><span>{{ session.tokens_display }} tokens</span><span>{{ session.cost_display }}</span></div>
           <div><small>{{ session.first_activity }} → {{ session.last_activity }}</small><a href="{% url 'trace-session-detail' session.id %}?days={{ days }}">Open session →</a></div>
