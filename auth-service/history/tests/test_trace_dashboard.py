@@ -226,6 +226,66 @@ class TraceDashboardViewTests(TestCase):
         self.assertNotContains(response, "foreign secret")
         self.assertNotContains(response, "trace-foreign")
 
+    def test_dashboard_renders_complete_personal_analytics_inventory(self):
+        fake = FakeLangfuseClient(
+            [
+                observation(
+                    observation_id="root",
+                    trace_id="trace-owned",
+                    user_id=str(self.user.pk),
+                    input_value="private prompt must not appear",
+                    output_value="private response must not appear",
+                ),
+                observation(
+                    observation_id="generation",
+                    trace_id="trace-owned",
+                    user_id=str(self.user.pk),
+                    root=False,
+                    observation_type="GENERATION",
+                    model="openai/gpt-5.5",
+                    tokens=120,
+                    cost=0.012,
+                ),
+            ]
+        )
+        with patch("history.trace_views.get_langfuse_client", return_value=fake):
+            response = self.client.get(reverse("trace-dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        for label in (
+            "Ansatz Analytics",
+            "Dashboard",
+            "Model Analytics",
+            "Total Cost",
+            "Daily Avg",
+            "Tokens",
+            "Active Days",
+            "Usage Trend",
+            "Cost Mix",
+            "Token Mix",
+            "Daily Activity",
+            "Top Models",
+            "Recent Sessions",
+        ):
+            self.assertContains(response, label)
+        self.assertContains(response, "openai/gpt-5.5")
+        self.assertContains(response, "trace-owned")
+        self.assertContains(response, "<svg", html=False)
+        self.assertContains(response, "<progress", html=False)
+        self.assertNotContains(response, " style=", html=False)
+        self.assertNotContains(response, "private prompt must not appear")
+        self.assertNotContains(response, "private response must not appear")
+
+    def test_empty_dashboard_retains_shell_and_upload_guidance(self):
+        with patch(
+            "history.trace_views.get_langfuse_client", return_value=FakeLangfuseClient([])
+        ):
+            response = self.client.get(reverse("trace-dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ansatz Analytics")
+        self.assertContains(response, "No uploaded usage yet")
+
     def test_days_are_bounded_and_unavailable_is_generic(self):
         fake = FakeLangfuseClient(error=LangfuseUnavailable("secret backend detail"))
         with patch("history.trace_views.get_langfuse_client", return_value=fake):
@@ -235,6 +295,87 @@ class TraceDashboardViewTests(TestCase):
         self.assertContains(response, "Trace 服务暂时不可用", status_code=503)
         self.assertNotContains(response, "secret backend detail", status_code=503)
         self.assertEqual(fake.calls[0]["days"], 30)
+
+    def test_model_analytics_is_owner_scoped_and_bounds_view_state(self):
+        owned = observation(
+            observation_id="owned-generation",
+            trace_id="trace-owned",
+            user_id=str(self.user.pk),
+            observation_type="GENERATION",
+            model="openai/gpt-5.5",
+            tokens=120,
+            cost=0.012,
+        )
+        foreign = observation(
+            observation_id="foreign-generation",
+            trace_id="trace-foreign",
+            user_id=str(self.other.pk),
+            observation_type="GENERATION",
+            model="foreign-secret-model",
+            tokens=999,
+            cost=99,
+        )
+        fake = FakeLangfuseClient([owned, foreign])
+
+        with patch("history.trace_views.get_langfuse_client", return_value=fake):
+            response = self.client.get(
+                reverse("trace-model-analytics"),
+                {
+                    "days": "3650",
+                    "metric": "secret",
+                    "granularity": "quarter",
+                    "chart": "pie",
+                    "model": "foreign-secret-model",
+                    "userId": str(self.other.pk),
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fake.calls[0]["user_id"], str(self.user.pk))
+        self.assertEqual(fake.calls[0]["days"], 30)
+        self.assertFalse(fake.calls[0]["include_io"])
+        self.assertContains(response, "Model Analytics")
+        self.assertContains(response, "openai/gpt-5.5")
+        self.assertNotContains(response, "foreign-secret-model")
+        self.assertNotContains(response, " style=", html=False)
+        for label in (
+            "Model distribution",
+            "Token composition",
+            "Cache split by model",
+            "Effective-cost scatterplot",
+            "What changed",
+            "Model breakdown",
+            "Recent Model Calls",
+        ):
+            self.assertContains(response, label)
+        self.assertEqual(response.context["metric"], "cost")
+        self.assertEqual(response.context["granularity"], "week")
+        self.assertEqual(response.context["chart"], "distribution")
+
+    def test_model_analytics_chart_mode_changes_to_time_series(self):
+        fake = FakeLangfuseClient(
+            [
+                observation(
+                    observation_id="generation",
+                    trace_id="trace-owned",
+                    user_id=str(self.user.pk),
+                    observation_type="GENERATION",
+                    model="openai/gpt-5.5",
+                    tokens=120,
+                    cost=0.012,
+                )
+            ]
+        )
+        with patch("history.trace_views.get_langfuse_client", return_value=fake):
+            response = self.client.get(
+                reverse("trace-model-analytics"),
+                {"chart": "bar", "granularity": "day"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Model usage over time")
+        self.assertContains(response, 'aria-label="Model usage trend"', html=False)
+        self.assertEqual(response.context["chart"], "bar")
 
     def test_trace_detail_is_owner_only_and_escapes_full_payload(self):
         owned = FakeLangfuseClient(
