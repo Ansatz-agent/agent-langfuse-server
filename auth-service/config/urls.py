@@ -29,6 +29,11 @@ urlpatterns = [
     ),
     path("traces/", trace_views.dashboard, name="trace-dashboard"),
     path(
+        "traces/models/",
+        trace_views.model_analytics,
+        name="trace-model-analytics",
+    ),
+    path(
         "traces/session/<str:session_id>/",
         trace_views.session_detail,
         name="trace-session-detail",

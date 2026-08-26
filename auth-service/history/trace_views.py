@@ -12,6 +12,11 @@ from django.utils.dateparse import parse_datetime
 
 from .auth_views import hermes_session_required
 from .langfuse_client import LangfuseUnavailable, get_langfuse_client
+from .trace_analytics import (
+    build_dashboard,
+    build_model_analytics,
+    parse_analytics_query,
+)
 
 
 ALLOWED_DAY_RANGES = {7, 30, 90}
@@ -66,114 +71,16 @@ def _owned(items: list[dict], user_id: str) -> list[dict]:
 
 
 def aggregate_dashboard(items: list[dict], *, days: int, query: str) -> dict:
-    sessions: dict[str, dict] = {}
-    trace_ids: set[str] = set()
-    active_days: set[str] = set()
-    daily = defaultdict(lambda: {"tokens": 0, "cost": Decimal(0)})
-    models = defaultdict(lambda: {"tokens": 0, "cost": Decimal(0), "observations": 0})
-    total_tokens = 0
-    total_cost = Decimal(0)
-
-    for item in items:
-        trace_id = str(item.get("traceId") or item.get("id") or "")
-        if not trace_id:
-            continue
-        trace_ids.add(trace_id)
-        session_id = str(item.get("sessionId") or f"trace-{trace_id}")
-        started_at = _parsed_time(item.get("startTime"))
-        day_key = started_at.date().isoformat()
-        active_days.add(day_key)
-        tokens = _usage_total(item)
-        cost = _cost_total(item)
-        total_tokens += tokens
-        total_cost += cost
-        daily[day_key]["tokens"] += tokens
-        daily[day_key]["cost"] += cost
-
-        model = item.get("providedModelName") or item.get("modelId")
-        if model and (tokens or cost or item.get("type") == "GENERATION"):
-            models[str(model)]["tokens"] += tokens
-            models[str(model)]["cost"] += cost
-            models[str(model)]["observations"] += 1
-
-        session = sessions.setdefault(
-            session_id,
-            {
-                "id": session_id,
-                "trace_ids": set(),
-                "trace_count": 0,
-                "tokens": 0,
-                "cost": Decimal(0),
-                "first_seen": started_at,
-                "last_seen": started_at,
-                "latest_trace_id": trace_id,
-                "trace_name": item.get("traceName") or item.get("name") or "对话",
-            },
-        )
-        session["trace_ids"].add(trace_id)
-        session["tokens"] += tokens
-        session["cost"] += cost
-        if started_at < session["first_seen"]:
-            session["first_seen"] = started_at
-        if started_at >= session["last_seen"]:
-            session["last_seen"] = started_at
-            session["latest_trace_id"] = trace_id
-            session["trace_name"] = item.get("traceName") or item.get("name") or "对话"
-
-    query_lower = query.casefold()
-    session_rows = []
-    for session in sessions.values():
-        session["trace_count"] = len(session.pop("trace_ids"))
-        session["cost_display"] = f"${session['cost']:.6f}"
-        haystack = f"{session['id']} {session['latest_trace_id']} {session['trace_name']}".casefold()
-        if query_lower and query_lower not in haystack:
-            continue
-        session_rows.append(session)
-    session_rows.sort(key=lambda item: item["last_seen"], reverse=True)
-
-    model_rows = [
-        {
-            "name": name,
-            "tokens": values["tokens"],
-            "cost": float(values["cost"]),
-            "cost_display": f"${values['cost']:.6f}",
-            "observations": values["observations"],
-        }
-        for name, values in models.items()
-    ]
-    model_rows.sort(key=lambda item: (item["tokens"], item["observations"]), reverse=True)
-    max_tokens = max((row["tokens"] for row in model_rows), default=0)
-    for row in model_rows:
-        row["percent"] = max(3, round(row["tokens"] * 100 / max_tokens)) if max_tokens else 3
-
-    daily_rows = [
-        {
-            "date": day,
-            "tokens": values["tokens"],
-            "cost": float(values["cost"]),
-            "cost_display": f"${values['cost']:.6f}",
-        }
-        for day, values in sorted(daily.items())
-    ]
-    daily_max = max((row["tokens"] for row in daily_rows), default=0)
-    for row in daily_rows:
-        row["percent"] = max(4, round(row["tokens"] * 100 / daily_max)) if daily_max else 4
-
-    return {
-        "days": days,
-        "query": query,
-        "metrics": {
-            "sessions": len(sessions),
-            "traces": len(trace_ids),
-            "tokens": total_tokens,
-            "cost": float(total_cost),
-            "cost_display": f"${total_cost:.6f}",
-            "active_days": len(active_days),
-        },
-        "sessions": session_rows,
-        "models": model_rows,
-        "daily": daily_rows,
-    }
+    """Compatibility wrapper for the original aggregation contract."""
+    return build_dashboard(
+        items,
+        days=days,
+        now=timezone.now(),
+        query=query,
+        metric="tokens",
+        granularity="day",
+        chart="bar",
+    )
 
 
 def _range(request):
@@ -187,8 +94,15 @@ def _range(request):
     return days, (now - timedelta(days=days)).isoformat(), now.isoformat()
 
 
-def _client_list(request, *, include_io=False, session_id=None, trace_id=None):
+def _client_list(
+    request, *, include_io=False, session_id=None, trace_id=None, days_override=None
+):
     days, from_time, to_time = _range(request)
+    if days_override is not None:
+        days = days_override
+        now = timezone.now()
+        from_time = (now - timedelta(days=days)).isoformat()
+        to_time = now.isoformat()
     items = get_langfuse_client().list_observations(
         user_id=str(request.user.pk),
         days=days,
@@ -203,28 +117,67 @@ def _client_list(request, *, include_io=False, session_id=None, trace_id=None):
 
 @hermes_session_required
 def dashboard(request):
-    query = request.GET.get("q", "").strip()[:80]
+    state = parse_analytics_query(request.GET, page="dashboard")
     try:
-        days, items = _client_list(request)
-        context = aggregate_dashboard(items, days=days, query=query)
+        _, items = _client_list(request, days_override=state.days)
+        context = build_dashboard(
+            items,
+            days=state.days,
+            now=timezone.now(),
+            query=state.query,
+            metric=state.metric,
+            granularity=state.granularity,
+            chart=state.chart,
+        )
         context["unavailable"] = False
         return render(request, "traces/dashboard.html", context)
     except LangfuseUnavailable:
-        days, _, _ = _range(request)
+        context = build_dashboard(
+            [],
+            days=state.days,
+            now=timezone.now(),
+            query=state.query,
+            metric=state.metric,
+            granularity=state.granularity,
+            chart=state.chart,
+        )
+        context["unavailable"] = True
         return render(
             request,
             "traces/dashboard.html",
-            {
-                "days": days,
-                "query": query,
-                "unavailable": True,
-                "metrics": {},
-                "sessions": [],
-                "models": [],
-                "daily": [],
-            },
+            context,
             status=503,
         )
+
+
+@hermes_session_required
+def model_analytics(request):
+    state = parse_analytics_query(request.GET, page="models")
+    try:
+        _, items = _client_list(request, days_override=state.days)
+        context = build_model_analytics(
+            items,
+            days=state.days,
+            now=timezone.now(),
+            model=state.model,
+            metric=state.metric,
+            granularity=state.granularity,
+            chart=state.chart,
+        )
+        context["unavailable"] = False
+        return render(request, "traces/model_analytics.html", context)
+    except LangfuseUnavailable:
+        context = build_model_analytics(
+            [],
+            days=state.days,
+            now=timezone.now(),
+            model="all",
+            metric=state.metric,
+            granularity=state.granularity,
+            chart=state.chart,
+        )
+        context["unavailable"] = True
+        return render(request, "traces/model_analytics.html", context, status=503)
 
 
 def _decorate_observations(items: list[dict]) -> list[dict]:
