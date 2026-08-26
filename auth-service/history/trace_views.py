@@ -467,12 +467,6 @@ def _session_index_context(items: list[dict], *, days: int, query: str) -> dict:
             "name": "Unsessioned traces" if session_key == "__unsessioned__" else latest["name"],
             "first_activity": traces[0]["started_at"],
             "last_activity": latest["started_at"],
-            "first_request_preview": next(
-                (trace["input_preview"] for trace in traces if trace["input_preview"]), ""
-            ),
-            "latest_response_preview": next(
-                (trace["output_preview"] for trace in reversed(traces) if trace["output_preview"]), ""
-            ),
             "trace_count": len(traces),
             "step_count": len(all_observations),
             "tokens": sum(trace["tokens"] for trace in traces),
@@ -487,8 +481,6 @@ def _session_index_context(items: list[dict], *, days: int, query: str) -> dict:
             [
                 row["id"],
                 row["name"],
-                row["first_request_preview"],
-                row["latest_response_preview"],
                 *row["trace_ids"],
                 *models,
                 *tools,
@@ -512,7 +504,7 @@ def trace_index(request):
     days, _, _ = _range(request)
     query = str(request.GET.get("q") or "").strip()[:80]
     try:
-        _, items = _client_list(request, include_io=True, days_override=days)
+        _, items = _client_list(request, include_io=False, days_override=days)
     except LangfuseUnavailable:
         return render(request, "traces/unavailable.html", status=503)
     return render(

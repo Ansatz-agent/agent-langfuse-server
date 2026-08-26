@@ -434,15 +434,15 @@ class TraceDashboardViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(fake.calls[0]["user_id"], self.user.username)
-        self.assertTrue(fake.calls[0]["include_io"])
+        self.assertFalse(fake.calls[0]["include_io"])
         self.assertEqual(len(response.context["sessions"]), 2)
         owned_session = response.context["sessions"][0]
         self.assertEqual(owned_session["id"], "session-owned")
         self.assertEqual(owned_session["trace_count"], 2)
-        self.assertEqual(owned_session["latest_response_preview"], "Latest session response")
+        self.assertNotIn("latest_response_preview", owned_session)
         self.assertContains(response, "Trace")
-        self.assertContains(response, "Summarize the quarterly report")
-        self.assertContains(response, "Latest session response")
+        self.assertNotContains(response, "Summarize the quarterly report")
+        self.assertNotContains(response, "Latest session response")
         self.assertContains(response, "document_search")
         self.assertContains(response, "Unsessioned traces")
         self.assertContains(
