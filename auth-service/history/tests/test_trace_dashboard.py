@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -10,7 +11,11 @@ from django.urls import reverse
 from django.utils import timezone
 
 from history.auth_views import ABSOLUTE_EXPIRY_KEY
-from history.langfuse_client import LangfuseClient, LangfuseUnavailable
+from history.langfuse_client import (
+    LangfuseClient,
+    LangfusePayloadTooLarge,
+    LangfuseUnavailable,
+)
 from history.trace_views import aggregate_dashboard
 
 
@@ -102,7 +107,10 @@ class LangfuseClientTests(TestCase):
         self.assertIn("/api/public/v2/observations?", first_url)
         self.assertIn("userId=7", first_url)
         self.assertIn("sessionId=session-a", first_url)
-        self.assertIn("limit=1000", first_url)
+        self.assertIn("limit=100", first_url)
+        fields = parse_qs(urlparse(first_url).query)["fields"][0].split(",")
+        self.assertNotIn("io", fields)
+        self.assertNotIn("metadata", fields)
         self.assertIn("fromStartTime=2026-07-25T00%3A00%3A00Z", first_url)
         self.assertIn("toStartTime=2026-08-24T00%3A00%3A00Z", first_url)
         self.assertIn("cursor=next-page", calls[1][0].full_url)
@@ -110,6 +118,40 @@ class LangfuseClientTests(TestCase):
         self.assertTrue(calls[0][0].get_header("Authorization").startswith("Basic "))
         self.assertNotIn("pk-test", first_url)
         self.assertNotIn("sk-test", first_url)
+
+    def test_single_observation_query_scopes_user_trace_and_observation_together(self):
+        calls = []
+
+        def transport(request, timeout):
+            calls.append(request)
+            return 200, json.dumps(
+                {
+                    "data": [
+                        observation(
+                            observation_id="step-1",
+                            trace_id="trace-1",
+                            user_id="7",
+                            input_value="question",
+                            output_value="answer",
+                        )
+                    ],
+                    "meta": {},
+                }
+            ).encode()
+
+        item = LangfuseClient(transport=transport).get_observation(
+            user_id="7", trace_id="trace-1", observation_id="step-1"
+        )
+
+        self.assertEqual(item["id"], "step-1")
+        query = parse_qs(urlparse(calls[0].full_url).query)
+        self.assertEqual(query["limit"], ["1"])
+        self.assertIn("io", query["fields"][0].split(","))
+        filters = json.loads(query["filter"][0])
+        self.assertEqual(
+            {(entry["column"], entry["value"]) for entry in filters},
+            {("userId", "7"), ("traceId", "trace-1"), ("id", "step-1")},
+        )
 
     def test_bad_status_invalid_shape_and_page_overflow_are_unavailable(self):
         for label, transport in (
@@ -178,12 +220,26 @@ class FakeLangfuseClient:
         self.items = list(items or [])
         self.error = error
         self.calls = []
+        self.detail_calls = []
 
     def list_observations(self, **kwargs):
         self.calls.append(kwargs)
         if self.error:
             raise self.error
         return list(self.items)
+
+    def get_observation(self, **kwargs):
+        self.detail_calls.append(kwargs)
+        if self.error:
+            raise self.error
+        for item in self.items:
+            if (
+                str(item.get("userId")) == kwargs["user_id"]
+                and str(item.get("traceId")) == kwargs["trace_id"]
+                and str(item.get("id")) == kwargs["observation_id"]
+            ):
+                return dict(item)
+        return None
 
 
 @override_settings(HERMES_SESSION_ABSOLUTE_AGE_SECONDS=3600)
@@ -516,6 +572,17 @@ class TraceDashboardViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["days"], 7)
+        self.assertFalse(owned.calls[0]["include_io"])
+        self.assertEqual(
+            owned.detail_calls,
+            [
+                {
+                    "user_id": self.user.username,
+                    "trace_id": "trace-owned",
+                    "observation_id": "root-observation",
+                }
+            ],
+        )
         self.assertEqual(
             [block["kind"] for block in response.context["content_blocks"]],
             ["user_request", "model_exchange", "tool_exchange", "final_response"],
@@ -540,6 +607,7 @@ class TraceDashboardViewTests(TestCase):
             )
         self.assertEqual(tool_response.status_code, 200)
         self.assertEqual(tool_response.context["selected_step"]["id"], "tool-one")
+        self.assertEqual(owned.detail_calls[-1]["observation_id"], "tool-one")
         self.assertContains(tool_response, "Tool arguments")
         self.assertContains(tool_response, "Tool result")
         self.assertContains(tool_response, "echo complete")
@@ -578,6 +646,8 @@ class TraceDashboardViewTests(TestCase):
         self.assertNotContains(response, "analytics-topbar")
         self.assertEqual(owned.calls[0]["user_id"], self.user.username)
         self.assertEqual(owned.calls[0]["trace_id"], "trace-owned")
+        self.assertEqual(len(owned.detail_calls), 1)
+        self.assertEqual(owned.detail_calls[0]["observation_id"], "tool-one")
 
         foreign = FakeLangfuseClient(
             [
@@ -626,6 +696,11 @@ class TraceDashboardViewTests(TestCase):
             overview = self.client.get(reverse("trace-detail", args=["trace-long"]))
         self.assertEqual(overview.status_code, 200)
         self.assertEqual(len(overview.context["steps"]), 51)
+        self.assertFalse(fake.calls[0]["include_io"])
+        self.assertEqual(
+            [call["observation_id"] for call in fake.detail_calls],
+            ["root-observation"],
+        )
         self.assertContains(overview, "root request")
         self.assertNotContains(overview, "private-input-40")
         self.assertNotContains(overview, "private-output-40")
@@ -636,6 +711,7 @@ class TraceDashboardViewTests(TestCase):
             )
         self.assertEqual(selected.status_code, 200)
         self.assertEqual(selected.context["selected_step"]["id"], "step-40")
+        self.assertEqual(fake.detail_calls[-1]["observation_id"], "step-40")
         self.assertContains(selected, "private-output-40")
         self.assertNotContains(selected, "private-output-39")
         self.assertNotContains(selected, "private-output-41")
@@ -645,6 +721,9 @@ class TraceDashboardViewTests(TestCase):
                 reverse("trace-detail", args=["trace-long"]), {"step": "not-owned"}
             )
         self.assertEqual(invalid.context["selected_step"]["id"], "overview")
+        self.assertNotIn(
+            "not-owned", [call["observation_id"] for call in fake.detail_calls]
+        )
 
     def test_trace_detail_is_owner_only_and_escapes_full_payload(self):
         owned = FakeLangfuseClient(
@@ -680,6 +759,32 @@ class TraceDashboardViewTests(TestCase):
         with patch("history.trace_views.get_langfuse_client", return_value=foreign):
             denied = self.client.get(reverse("trace-detail", args=["trace-foreign"]))
         self.assertEqual(denied.status_code, 404)
+
+    def test_oversized_selected_payload_keeps_trace_shell_available(self):
+        class OversizedPayloadClient(FakeLangfuseClient):
+            def get_observation(self, **kwargs):
+                self.detail_calls.append(kwargs)
+                raise LangfusePayloadTooLarge("private size detail")
+
+        fake = OversizedPayloadClient(
+            [
+                observation(
+                    observation_id="root",
+                    trace_id="trace-large-payload",
+                    user_id=self.user.username,
+                )
+            ]
+        )
+        with patch("history.trace_views.get_langfuse_client", return_value=fake):
+            response = self.client.get(
+                reverse("trace-detail", args=["trace-large-payload"])
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Selected content is too large to display.")
+        self.assertContains(response, "Steps")
+        self.assertNotContains(response, "private size detail")
+        self.assertEqual(fake.detail_calls[0]["observation_id"], "root")
 
     def test_trace_detail_uses_light_shell_and_content_first_execution_views(self):
         owned = FakeLangfuseClient(
@@ -805,10 +910,12 @@ class TraceDashboardViewTests(TestCase):
         self.assertContains(response, "Session traces")
         self.assertContains(response, "All sessions")
         self.assertContains(response, "9.00s")
-        self.assertContains(response, "question")
-        self.assertContains(response, "second answer")
+        self.assertNotContains(response, "question")
+        self.assertNotContains(response, "second answer")
         self.assertContains(response, "Inspect trace", count=2)
         self.assertNotContains(response, "<pre", html=False)
+        self.assertFalse(owned.calls[0]["include_io"])
+        self.assertEqual(owned.detail_calls, [])
         self.assertEqual(
             [trace["id"] for trace in response.context["traces"]],
             ["trace-owned", "trace-owned-second"],
@@ -839,8 +946,34 @@ class TraceDashboardViewTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "unassigned content")
+        self.assertNotContains(response, "unassigned content")
         self.assertNotContains(response, "assigned secret")
+
+    def test_large_session_uses_only_one_lightweight_collection_query(self):
+        owned = FakeLangfuseClient(
+            [
+                observation(
+                    observation_id=f"step-{index}",
+                    trace_id=f"trace-{index // 10}",
+                    user_id=self.user.username,
+                    session_id="large-session",
+                    root=index % 10 == 0,
+                    input_value=f"large-input-{index}",
+                    output_value=f"large-output-{index}",
+                )
+                for index in range(843)
+            ]
+        )
+        with patch("history.trace_views.get_langfuse_client", return_value=owned):
+            response = self.client.get(
+                reverse("trace-session-detail", args=["large-session"])
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(owned.calls), 1)
+        self.assertFalse(owned.calls[0]["include_io"])
+        self.assertEqual(owned.detail_calls, [])
+        self.assertNotContains(response, "large-input-0")
 
     def test_session_detail_is_owner_only(self):
         foreign = FakeLangfuseClient(

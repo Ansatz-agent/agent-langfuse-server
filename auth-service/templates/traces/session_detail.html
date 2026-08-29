@@ -12,7 +12,6 @@
     {% for trace in traces %}
       <article class="session-compact-trace">
         <header><div><span class="trace-status trace-status-{{ trace.status|lower }}">{{ trace.status }}</span><div><h2>{{ trace.name }}</h2><small>{{ trace.id }}</small></div></div><time>{{ trace.started_at }}</time></header>
-        <div class="session-trace-previews"><section><h3>Request</h3><p>{{ trace.input_preview|default:"No root input captured."|truncatechars:280 }}</p></section><section><h3>Response</h3><p>{{ trace.output_preview|default:"No root output captured."|truncatechars:280 }}</p></section></div>
         <footer><div class="trace-index-tags"><span>{{ trace.duration_display }}</span><span>{{ trace.observation_count }} steps</span><span>{{ trace.models|join:", "|default:"No model" }}</span><span>{{ trace.tokens_display }} tokens</span><span>{{ trace.cost_display }}</span></div><a href="{% url 'trace-detail' trace.id %}">Inspect trace →</a></footer>
       </article>
     {% empty %}<div class="trace-index-empty"><h2>No traces</h2><p>This session has no captured traces in the selected range.</p></div>{% endfor %}

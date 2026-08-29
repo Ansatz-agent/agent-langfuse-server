@@ -5,7 +5,11 @@
     <div class="trace-selected-step-meta">{% if selected_step.observation.model_display %}<span>{{ selected_step.observation.model_display }}</span>{% endif %}<span>{{ selected_step.observation.duration_display }}</span>{% if selected_step.observation.tokens %}<span>{{ selected_step.observation.tokens|intcomma }} tokens</span>{% endif %}{% if selected_step.observation.is_error %}<strong>Error</strong>{% endif %}</div>
   </header>
 
-  {% if selected_step.kind == "overview" %}
+  {% if payload_too_large %}
+    <div class="trace-index-empty"><h3>Selected content is too large to display.</h3><p>The trace index remains available; choose another step.</p></div>
+  {% elif payload_unavailable %}
+    <div class="trace-index-empty"><h3>Selected content is unavailable.</h3><p>The trace index remains available; choose another step.</p></div>
+  {% elif selected_step.kind == "overview" %}
     <div class="trace-overview-grid">
       <section><h3>User request</h3><div class="trace-payload-scroll"><pre>{{ selected_step.input_display|default:"No root request captured." }}</pre></div></section>
       <section><h3>Final response</h3><div class="trace-payload-scroll"><pre>{{ selected_step.output_display|default:"No root response captured." }}</pre></div></section>

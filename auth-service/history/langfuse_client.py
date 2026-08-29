@@ -15,11 +15,19 @@ class LangfuseUnavailable(RuntimeError):
     pass
 
 
+class LangfusePayloadTooLarge(LangfuseUnavailable):
+    pass
+
+
+COLLECTION_PAGE_SIZE = 100
+MAX_COLLECTION_OBSERVATIONS = 2_000
+
+
 def _default_transport(request: Request, timeout: int) -> tuple[int, bytes]:
     with urlopen(request, timeout=timeout) as response:  # noqa: S310 - private configured origin
         payload = response.read(8 * 1024 * 1024 + 1)
         if len(payload) > 8 * 1024 * 1024:
-            raise LangfuseUnavailable("Langfuse response exceeded the size limit")
+            raise LangfusePayloadTooLarge("Langfuse response exceeded the size limit")
         return response.status, payload
 
 
@@ -83,10 +91,10 @@ class LangfuseClient:
 
         fields = "basic,time,model,usage,metrics,trace_context"
         if include_io:
-            fields += ",io,metadata"
+            raise ValueError("bulk observation queries cannot include IO")
         base_params = {
             "fields": fields,
-            "limit": "1000",
+            "limit": str(COLLECTION_PAGE_SIZE),
             "userId": user_id,
         }
         if from_time:
@@ -112,6 +120,8 @@ class LangfuseClient:
                 raise LangfuseUnavailable("Langfuse returned an invalid page")
             if not all(isinstance(item, dict) for item in data):
                 raise LangfuseUnavailable("Langfuse returned an invalid observation")
+            if len(observations) + len(data) > MAX_COLLECTION_OBSERVATIONS:
+                raise LangfuseUnavailable("Langfuse observation limit exceeded")
             observations.extend(data)
             cursor = meta.get("cursor")
             if cursor is None:
@@ -120,6 +130,48 @@ class LangfuseClient:
                 raise LangfuseUnavailable("Langfuse returned an invalid cursor")
             seen_cursors.add(cursor)
         raise LangfuseUnavailable("Langfuse pagination exceeded the safety bound")
+
+    def get_observation(
+        self, *, user_id: str, trace_id: str, observation_id: str
+    ) -> dict | None:
+        if not user_id or not trace_id or not observation_id:
+            raise ValueError("user_id, trace_id, and observation_id are required")
+        filters = [
+            {
+                "type": "string",
+                "column": column,
+                "operator": "=",
+                "value": value,
+            }
+            for column, value in (
+                ("userId", user_id),
+                ("traceId", trace_id),
+                ("id", observation_id),
+            )
+        ]
+        response = self._get(
+            {
+                "fields": "basic,time,model,usage,metrics,trace_context,io,metadata",
+                "filter": json.dumps(filters, separators=(",", ":")),
+                "limit": "1",
+            }
+        )
+        data = response.get("data")
+        meta = response.get("meta")
+        if not isinstance(data, list) or not isinstance(meta, dict):
+            raise LangfuseUnavailable("Langfuse returned an invalid detail page")
+        if not data:
+            return None
+        if len(data) != 1 or not isinstance(data[0], dict):
+            raise LangfuseUnavailable("Langfuse returned an invalid observation detail")
+        item = data[0]
+        if (
+            str(item.get("userId")) != user_id
+            or str(item.get("traceId")) != trace_id
+            or str(item.get("id")) != observation_id
+        ):
+            raise LangfuseUnavailable("Langfuse returned an invalid observation detail")
+        return item
 
 
 def get_langfuse_client() -> LangfuseClient:
