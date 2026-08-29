@@ -13,7 +13,11 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from .auth_views import hermes_session_required
-from .langfuse_client import LangfuseUnavailable, get_langfuse_client
+from .langfuse_client import (
+    LangfusePayloadTooLarge,
+    LangfuseUnavailable,
+    get_langfuse_client,
+)
 from .trace_analytics import (
     build_dashboard,
     build_model_analytics,
@@ -416,8 +420,6 @@ def _trace_row(trace_id: str, trace_items: list[dict]) -> dict:
         "name": str(root.get("traceName") or root.get("name") or "Agent trace"),
         "session_id": str(root.get("sessionId") or ""),
         "started_at": root.get("startTime"),
-        "input_preview": root["input_display"],
-        "output_preview": root["output_display"],
         "status": "Error" if any(item["is_error"] for item in observations) else "Complete",
         "models": models,
         "tools": tools,
@@ -538,17 +540,36 @@ def _inspector_steps(observations: list[dict], root: dict, blocks: list[dict]) -
             "observation": root,
         }
     ]
-    for block in blocks:
-        if block["kind"] in {"user_request", "final_response"}:
+    for observation in observations:
+        if observation is root:
             continue
-        observation = block["observation"]
         observation_id = str(observation.get("id") or f"step-{len(steps)}")
+        kind = {
+            "llm": "model_exchange",
+            "tool": "tool_exchange",
+        }.get(observation["kind"], "event")
+        title = (
+            "Model response"
+            if kind == "model_exchange"
+            else f"Tool · {observation.get('name') or 'Unknown tool'}"
+            if kind == "tool_exchange"
+            else observation.get("name") or "Captured event"
+        )
         steps.append(
             {
-                **block,
                 "id": observation_id,
                 "sequence": len(steps),
+                "kind": kind,
+                "kind_label": {
+                    "model_exchange": "Model response",
+                    "tool_exchange": "Tool call",
+                    "event": "Event",
+                }[kind],
+                "title": title,
+                "input_display": observation.get("input_display") or "",
+                "output_display": observation.get("output_display") or "",
                 "metadata_display": observation.get("metadata_display") or "",
+                "observation": observation,
             }
         )
     return steps
@@ -599,45 +620,99 @@ def _trace_detail_context(
         "steps": steps,
         "selected_step": selected_step,
         "summary": summary,
+        "payload_too_large": False,
+        "payload_unavailable": False,
     }
+
+
+def _trace_context_with_selected_payload(
+    request,
+    trace_id: str,
+    items: list[dict],
+    *,
+    days: int,
+    selected_step_id: str,
+) -> dict:
+    context = _trace_detail_context(
+        trace_id,
+        items,
+        days=days,
+        selected_step_id=selected_step_id,
+    )
+    selected = context["selected_step"]
+    payload_id = (
+        str(context["root_observation"].get("id") or "")
+        if selected["id"] == "overview"
+        else selected["id"]
+    )
+    if not payload_id:
+        context["payload_unavailable"] = True
+        return context
+    try:
+        payload = get_langfuse_client().get_observation(
+            user_id=request.user.get_username(),
+            trace_id=trace_id,
+            observation_id=payload_id,
+        )
+    except LangfusePayloadTooLarge:
+        context["payload_too_large"] = True
+        return context
+    if payload is None:
+        context["payload_unavailable"] = True
+        return context
+    merged = [
+        {**item, **payload} if str(item.get("id")) == payload_id else item
+        for item in items
+    ]
+    return _trace_detail_context(
+        trace_id,
+        merged,
+        days=days,
+        selected_step_id=selected["id"],
+    )
 
 
 @hermes_session_required
 def trace_detail(request, trace_id):
     try:
-        days, items = _client_list(request, include_io=True, trace_id=trace_id)
+        days, items = _client_list(request, include_io=False, trace_id=trace_id)
     except LangfuseUnavailable:
         return render(request, "traces/unavailable.html", status=503)
     items = [item for item in items if str(item.get("traceId")) == trace_id]
     if not items:
         raise Http404
-    return render(
-        request,
-        "traces/trace_detail.html",
-        _trace_detail_context(
+    try:
+        context = _trace_context_with_selected_payload(
+            request,
             trace_id,
             items,
             days=days,
             selected_step_id=str(request.GET.get("step") or "overview")[:200],
-        ),
-    )
+        )
+    except LangfuseUnavailable:
+        return render(request, "traces/unavailable.html", status=503)
+    return render(request, "traces/trace_detail.html", context)
 
 
 @hermes_session_required
 def trace_step_fragment(request, trace_id, observation_id):
     try:
-        days, items = _client_list(request, include_io=True, trace_id=trace_id)
+        days, items = _client_list(request, include_io=False, trace_id=trace_id)
     except LangfuseUnavailable:
         return render(request, "traces/unavailable.html", status=503)
     items = [item for item in items if str(item.get("traceId")) == trace_id]
     if not items:
         raise Http404
-    context = _trace_detail_context(
-        trace_id,
-        items,
-        days=days,
-        selected_step_id=str(observation_id)[:200],
-    )
+    try:
+        context = _trace_context_with_selected_payload(
+            request,
+            trace_id,
+            items,
+            days=days,
+            selected_step_id=str(observation_id)[:200],
+        )
+    except LangfuseUnavailable:
+        return render(request, "traces/unavailable.html", status=503)
     return render(request, "traces/_trace_step_panel.html", context)
 
 
@@ -647,7 +722,7 @@ def session_detail(request, session_id):
     try:
         days, items = _client_list(
             request,
-            include_io=True,
+            include_io=False,
             session_id=None if unsessioned else session_id,
         )
     except LangfuseUnavailable:
