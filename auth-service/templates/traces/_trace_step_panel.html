@@ -2,7 +2,7 @@
 <article class="trace-selected-step trace-selected-{{ selected_step.kind }}" data-trace-step-panel data-selected-step-id="{{ selected_step.id }}">
   <header class="trace-selected-step-header">
     <div><span class="trace-step-sequence">{% if selected_step.sequence %}{{ selected_step.sequence }}{% else %}O{% endif %}</span><div><small>{{ selected_step.kind_label|upper }}</small><h2>{{ selected_step.title }}</h2></div></div>
-    <div class="trace-selected-step-meta">{% if selected_step.observation.model_display %}<span>{{ selected_step.observation.model_display }}</span>{% endif %}<span>{{ selected_step.observation.duration_display }}</span>{% if selected_step.observation.tokens %}<span>{{ selected_step.observation.tokens|intcomma }} tokens</span>{% endif %}{% if selected_step.observation.is_error %}<strong>Error</strong>{% endif %}</div>
+    <div class="trace-selected-step-meta">{% if selected_step.observation.model_display %}<span>{{ selected_step.observation.model_display }}</span>{% endif %}<span>{{ selected_step.observation.duration_display }}</span>{% if selected_step.observation.kind == "llm" %}<span>{{ selected_step.observation.tokens_display }} tokens</span>{% endif %}{% if selected_step.observation.is_error %}<strong>Error</strong>{% endif %}</div>
   </header>
 
   {% if payload_too_large %}

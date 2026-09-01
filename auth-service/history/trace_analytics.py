@@ -79,13 +79,20 @@ def _dict_number(mapping: Any, *keys: str) -> tuple[Decimal, bool]:
     return Decimal(0), False
 
 
-def _usage(item: dict) -> dict[str, int]:
+def _legacy_usage_number(item: dict, key: str) -> tuple[Decimal, bool]:
+    parsed = _decimal(item.get(key))
+    if parsed is None or parsed == 0:
+        return Decimal(0), False
+    return parsed, True
+
+
+def observation_usage(item: dict) -> dict[str, int | bool]:
+    """Return usage values without treating Langfuse's zero fallbacks as evidence."""
     details = item.get("usageDetails")
     input_value, has_input = _dict_number(details, "input", "input_tokens")
     if not has_input:
-        parsed = _decimal(item.get("inputUsage"))
-        input_value, has_input = (parsed or Decimal(0)), parsed is not None
-    cached, _ = _dict_number(
+        input_value, has_input = _legacy_usage_number(item, "inputUsage")
+    cached, has_cached_input = _dict_number(
         details,
         "input_cached_tokens",
         "cache_read_input_tokens",
@@ -93,33 +100,34 @@ def _usage(item: dict) -> dict[str, int]:
     )
     output, has_output = _dict_number(details, "output", "output_tokens")
     if not has_output:
-        parsed = _decimal(item.get("outputUsage"))
-        output, has_output = (parsed or Decimal(0)), parsed is not None
-    reasoning, _ = _dict_number(
+        output, has_output = _legacy_usage_number(item, "outputUsage")
+    reasoning, has_reasoning_output = _dict_number(
         details,
         "output_reasoning_tokens",
         "reasoning_tokens",
     )
     total, has_total = _dict_number(details, "total", "total_tokens")
     if not has_total:
-        parsed = _decimal(item.get("totalUsage"))
-        total, has_total = (parsed or Decimal(0)), parsed is not None
-    if not has_total:
+        total, has_total = _legacy_usage_number(item, "totalUsage")
+    if not has_total and (has_input or has_output):
         total = input_value + output
+        has_total = True
     return {
         "input": int(input_value),
+        "has_input": has_input,
         "cached_input": int(cached),
+        "has_cached_input": has_cached_input,
         "output": int(output),
+        "has_output": has_output,
         "reasoning_output": int(reasoning),
+        "has_reasoning_output": has_reasoning_output,
         "total": int(total),
+        "has_total": has_total,
     }
 
 
-def _cost(item: dict) -> tuple[Decimal, bool]:
-    if "totalCost" in item and item.get("totalCost") is not None:
-        parsed = _decimal(item.get("totalCost"))
-        if parsed is not None:
-            return parsed, True
+def observation_cost(item: dict) -> tuple[Decimal, bool]:
+    """Return cost while preserving missing-vs-explicit-zero evidence."""
     details = item.get("costDetails")
     total, has_total = _dict_number(details, "total")
     if has_total:
@@ -129,6 +137,10 @@ def _cost(item: dict) -> tuple[Decimal, bool]:
         valid = [value for value in values if value is not None]
         if valid:
             return sum(valid, Decimal(0)), True
+    if "totalCost" in item and item.get("totalCost") is not None:
+        parsed = _decimal(item.get("totalCost"))
+        if parsed is not None and parsed != 0:
+            return parsed, True
     return Decimal(0), False
 
 
@@ -251,6 +263,11 @@ def _base_projection(items: list[dict], *, days: int, now: datetime) -> dict:
             "output": 0,
             "reasoning_output": 0,
             "tokens": 0,
+            "usage_calls": 0,
+            "input_calls": 0,
+            "cached_input_calls": 0,
+            "output_calls": 0,
+            "reasoning_output_calls": 0,
             "cost": Decimal(0),
             "priced_calls": 0,
             "latencies": [],
@@ -261,6 +278,7 @@ def _base_projection(items: list[dict], *, days: int, now: datetime) -> dict:
     daily_values = defaultdict(
         lambda: {
             "tokens": 0,
+            "usage_calls": 0,
             "cost": Decimal(0),
             "priced_calls": 0,
             "calls": 0,
@@ -270,21 +288,37 @@ def _base_projection(items: list[dict], *, days: int, now: datetime) -> dict:
     total_cost = Decimal(0)
     has_cost = False
     total_tokens = 0
-    token_mix = {"input": 0, "cached_input": 0, "output": 0, "reasoning_output": 0}
+    token_keys = ("input", "cached_input", "output", "reasoning_output")
+    token_mix = {
+        "input": 0,
+        "cached_input": 0,
+        "output": 0,
+        "reasoning_output": 0,
+        "input_calls": 0,
+        "cached_input_calls": 0,
+        "output_calls": 0,
+        "reasoning_output_calls": 0,
+    }
     active_days: set[str] = set()
     errors = 0
 
     for item in generations:
-        usage = _usage(item)
-        cost, priced = _cost(item)
+        usage = observation_usage(item)
+        cost, priced = observation_cost(item)
         model_name = canonical_model(item)
         model = model_values[model_name]
         model["calls"] += 1
-        for key in token_mix:
-            model[key] += usage[key]
-            token_mix[key] += usage[key]
-        model["tokens"] += usage["total"]
-        total_tokens += usage["total"]
+        for key in token_keys:
+            evidence_key = f"has_{key}"
+            if usage[evidence_key]:
+                model[key] += usage[key]
+                model[f"{key}_calls"] += 1
+                token_mix[key] += usage[key]
+                token_mix[f"{key}_calls"] += 1
+        if usage["has_total"]:
+            model["tokens"] += usage["total"]
+            model["usage_calls"] += 1
+            total_tokens += usage["total"]
         if priced:
             model["cost"] += cost
             model["priced_calls"] += 1
@@ -302,7 +336,9 @@ def _base_projection(items: list[dict], *, days: int, now: datetime) -> dict:
             day = started.date().isoformat()
             active_days.add(day)
             daily = daily_values[day]
-            daily["tokens"] += usage["total"]
+            if usage["has_total"]:
+                daily["tokens"] += usage["total"]
+                daily["usage_calls"] += 1
             daily["calls"] += 1
             daily["errors"] += int(_is_error(item))
             if priced:
@@ -314,6 +350,7 @@ def _base_projection(items: list[dict], *, days: int, now: datetime) -> dict:
         tokens = values["tokens"]
         cost = float(values["cost"])
         has_model_cost = values["priced_calls"] > 0
+        has_model_tokens = values["usage_calls"] > 0
         latencies = values.pop("latencies")
         providers = sorted(values.pop("providers"))
         models.append(
@@ -322,11 +359,31 @@ def _base_projection(items: list[dict], *, days: int, now: datetime) -> dict:
                 **values,
                 "cost": cost,
                 "has_cost": has_model_cost,
+                "has_tokens": has_model_tokens,
                 "cost_display": _compact(cost, money=True) if has_model_cost else "—",
-                "tokens_display": _compact(tokens),
+                "tokens_display": _compact(tokens) if has_model_tokens else "—",
+                "input_display": (
+                    _compact(values["input"]) if values["input_calls"] else "—"
+                ),
+                "cached_input_display": (
+                    _compact(values["cached_input"])
+                    if values["cached_input_calls"]
+                    else "—"
+                ),
+                "output_display": (
+                    _compact(values["output"]) if values["output_calls"] else "—"
+                ),
+                "reasoning_output_display": (
+                    _compact(values["reasoning_output"])
+                    if values["reasoning_output_calls"]
+                    else "—"
+                ),
                 "unit_cost": (
                     cost / tokens * 1_000_000
-                    if has_model_cost and values["priced_calls"] == values["calls"] and tokens
+                    if has_model_cost
+                    and values["priced_calls"] == values["calls"]
+                    and values["usage_calls"] == values["calls"]
+                    and tokens
                     else None
                 ),
                 "cache_hit_rate": (
@@ -357,6 +414,12 @@ def _base_projection(items: list[dict], *, days: int, now: datetime) -> dict:
                 **value,
                 "cost": row_cost,
                 "has_cost": value["priced_calls"] > 0,
+                "has_tokens": value["usage_calls"] > 0 or value["calls"] == 0,
+                "tokens_display": (
+                    _compact(value["tokens"])
+                    if value["usage_calls"] > 0 or value["calls"] == 0
+                    else "—"
+                ),
                 "cost_display": (
                     _compact(row_cost, money=True) if value["priced_calls"] > 0 else "—"
                 ),
@@ -372,11 +435,21 @@ def _base_projection(items: list[dict], *, days: int, now: datetime) -> dict:
         )
 
     token_mix["cache_hit_rate"] = (
-        token_mix["cached_input"] / token_mix["input"] if token_mix["input"] else None
+        token_mix["cached_input"] / token_mix["input"]
+        if token_mix["input_calls"]
+        and token_mix["cached_input_calls"]
+        and token_mix["input"]
+        else None
     )
     token_mix["uncached_input"] = max(0, token_mix["input"] - token_mix["cached_input"])
+    token_mix["uncached_input_calls"] = min(
+        token_mix["input_calls"], token_mix["cached_input_calls"]
+    )
     token_mix["regular_output"] = max(
         0, token_mix["output"] - token_mix["reasoning_output"]
+    )
+    token_mix["regular_output_calls"] = min(
+        token_mix["output_calls"], token_mix["reasoning_output_calls"]
     )
     token_mix["segments"] = _ring_segments(
         [
@@ -394,13 +467,24 @@ def _base_projection(items: list[dict], *, days: int, now: datetime) -> dict:
         "regular_output",
         "reasoning_output",
     ):
-        token_mix[f"{key}_display"] = format_tokens(token_mix[key])
+        evidence_key = {
+            "input": "input_calls",
+            "cached_input": "cached_input_calls",
+            "uncached_input": "uncached_input_calls",
+            "output": "output_calls",
+            "regular_output": "regular_output_calls",
+            "reasoning_output": "reasoning_output_calls",
+        }[key]
+        token_mix[f"{key}_display"] = (
+            format_tokens(token_mix[key]) if token_mix[evidence_key] else "—"
+        )
     return {
         "generations": generations,
         "models": models,
         "daily": daily,
         "daily_values": daily_values,
         "total_tokens": total_tokens,
+        "has_tokens": not generations or any(row["usage_calls"] for row in models),
         "total_cost": float(total_cost),
         "has_cost": has_cost,
         "token_mix": token_mix,
@@ -413,7 +497,14 @@ def _base_projection(items: list[dict], *, days: int, now: datetime) -> dict:
 
 def _trend(daily: list[dict], *, granularity: str, metric: str) -> list[dict]:
     buckets = defaultdict(
-        lambda: {"tokens": 0, "cost": 0.0, "has_cost": False, "calls": 0, "priced_calls": 0}
+        lambda: {
+            "tokens": 0,
+            "usage_calls": 0,
+            "cost": 0.0,
+            "has_cost": False,
+            "calls": 0,
+            "priced_calls": 0,
+        }
     )
     for row in daily:
         day = datetime.fromisoformat(row["date"]).date()
@@ -424,6 +515,7 @@ def _trend(daily: list[dict], *, granularity: str, metric: str) -> list[dict]:
         )
         bucket = buckets[key]
         bucket["tokens"] += row["tokens"]
+        bucket["usage_calls"] += row["usage_calls"]
         bucket["cost"] += row["cost"]
         bucket["has_cost"] = bucket["has_cost"] or row["has_cost"]
         bucket["calls"] += row["calls"]
@@ -436,18 +528,21 @@ def _trend(daily: list[dict], *, granularity: str, metric: str) -> list[dict]:
             and value["tokens"]
             and value["calls"] > 0
             and value["priced_calls"] == value["calls"]
+            and value["usage_calls"] == value["calls"]
             else None
         )
+        has_tokens = value["usage_calls"] > 0 or value["calls"] == 0
         chart_value = {
             "cost": value["cost"] if value["has_cost"] else 0,
-            "tokens": value["tokens"],
+            "tokens": value["tokens"] if has_tokens else 0,
             "unit_cost": unit_cost or 0,
         }[metric]
         rows.append(
             {
                 "label": key,
                 **value,
-                "tokens_display": format_tokens(value["tokens"]),
+                "has_tokens": has_tokens,
+                "tokens_display": format_tokens(value["tokens"]) if has_tokens else "—",
                 "unit_cost": unit_cost,
                 "value": chart_value,
             }
@@ -475,6 +570,8 @@ def _sessions(items: list[dict], *, query: str) -> list[dict]:
                 "name": str(item.get("traceName") or item.get("name") or "Ansatz session"),
                 "trace_ids": set(),
                 "tokens": 0,
+                "generation_calls": 0,
+                "usage_calls": 0,
                 "cost": Decimal(0),
                 "has_cost": False,
                 "errors": 0,
@@ -484,8 +581,12 @@ def _sessions(items: list[dict], *, query: str) -> list[dict]:
         )
         row["trace_ids"].add(trace_id)
         if _generation(item):
-            row["tokens"] += _usage(item)["total"]
-            cost, priced = _cost(item)
+            row["generation_calls"] += 1
+            usage = observation_usage(item)
+            if usage["has_total"]:
+                row["tokens"] += usage["total"]
+                row["usage_calls"] += 1
+            cost, priced = observation_cost(item)
             if priced:
                 row["cost"] += cost
                 row["has_cost"] = True
@@ -501,7 +602,10 @@ def _sessions(items: list[dict], *, query: str) -> list[dict]:
         cost = float(row["cost"])
         row["cost"] = cost
         row["trace_count"] = trace_count
-        row["tokens_display"] = format_tokens(row["tokens"])
+        row["has_tokens"] = row["generation_calls"] == 0 or row["usage_calls"] > 0
+        row["tokens_display"] = (
+            format_tokens(row["tokens"]) if row["has_tokens"] else "—"
+        )
         row["cost_display"] = _compact(cost, money=True) if row["has_cost"] else "—"
         haystack = f"{row['id']} {row['name']} {row['latest_trace_id']}".casefold()
         if not needle or needle in haystack:
@@ -581,7 +685,10 @@ def build_dashboard(
             "sessions": len(sessions_all),
             "traces": len(trace_ids),
             "tokens": base["total_tokens"],
-            "tokens_display": format_tokens(base["total_tokens"]),
+            "has_tokens": base["has_tokens"],
+            "tokens_display": (
+                format_tokens(base["total_tokens"]) if base["has_tokens"] else "—"
+            ),
             "cost": base["total_cost"],
             "has_cost": base["has_cost"],
             "cost_display": (
@@ -639,8 +746,8 @@ def build_model_analytics(
         top_share = top["cost_share"] if scoped["total_cost"] > 0 else top["token_share"]
     recent_calls = []
     for item in scoped["generations"]:
-        usage = _usage(item)
-        cost, priced = _cost(item)
+        usage = observation_usage(item)
+        cost, priced = observation_cost(item)
         recent_calls.append(
             {
                 "id": str(item.get("id") or ""),
@@ -650,7 +757,10 @@ def build_model_analytics(
                 "provider": str(item.get("name") or "Unknown provider"),
                 "model": canonical_model(item),
                 "tokens": usage["total"],
-                "tokens_display": format_tokens(usage["total"]),
+                "has_tokens": usage["has_total"],
+                "tokens_display": (
+                    format_tokens(usage["total"]) if usage["has_total"] else "—"
+                ),
                 "cost": float(cost),
                 "has_cost": priced,
                 "cost_display": _compact(float(cost), money=True) if priced else "—",
@@ -738,7 +848,10 @@ def build_model_analytics(
                 _compact(scoped["total_cost"], money=True) if scoped["has_cost"] else "—"
             ),
             "tokens": scoped["total_tokens"],
-            "tokens_display": format_tokens(scoped["total_tokens"]),
+            "has_tokens": scoped["has_tokens"],
+            "tokens_display": (
+                format_tokens(scoped["total_tokens"]) if scoped["has_tokens"] else "—"
+            ),
             "cache_hit_rate": scoped["token_mix"]["cache_hit_rate"],
             "top_model_share": top_share,
             "top_model": top["name"] if top else None,
