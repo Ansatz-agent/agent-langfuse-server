@@ -31,8 +31,8 @@ def observation(
     observation_type: str = "SPAN",
     root: bool = True,
     model: str | None = None,
-    tokens: int = 0,
-    cost: float = 0,
+    tokens: int | None = 0,
+    cost: float | None = 0,
     input_value=None,
     output_value=None,
     parent_observation_id: str | None = None,
@@ -57,9 +57,12 @@ def observation(
         "output": output_value,
         "metadata": metadata if metadata is not None else {"username": "alice"},
         "providedModelName": model,
-        "usageDetails": {"total": tokens} if tokens else {},
-        "costDetails": {"total": cost} if cost else {},
-        "totalCost": cost,
+        "usageDetails": {"total": tokens} if tokens is not None else {},
+        "inputUsage": 0,
+        "outputUsage": 0,
+        "totalUsage": 0,
+        "costDetails": {"total": cost} if cost is not None else {},
+        "totalCost": cost if cost is not None else 0,
         "traceName": "Ansatz conversation",
         "tags": ["desktop"],
         "release": "0.17.0",
@@ -335,6 +338,65 @@ class TraceDashboardViewTests(TestCase):
         self.assertNotContains(response, " style=", html=False)
         self.assertNotContains(response, "private prompt must not appear")
         self.assertNotContains(response, "private response must not appear")
+
+    def test_missing_usage_renders_unavailable_across_trace_surfaces(self):
+        fake = FakeLangfuseClient(
+            [
+                observation(
+                    observation_id="root",
+                    trace_id="trace-missing",
+                    user_id=self.user.username,
+                    session_id="session-missing",
+                ),
+                observation(
+                    observation_id="generation-missing",
+                    trace_id="trace-missing",
+                    user_id=self.user.username,
+                    session_id="session-missing",
+                    root=False,
+                    observation_type="GENERATION",
+                    model="deepseek-v4-flash",
+                    tokens=None,
+                    cost=None,
+                ),
+            ]
+        )
+
+        for route, args in (
+            ("trace-dashboard", []),
+            ("trace-model-analytics", []),
+            ("trace-index", []),
+            ("trace-session-detail", ["session-missing"]),
+            ("trace-detail", ["trace-missing"]),
+        ):
+            with self.subTest(route=route):
+                with patch("history.trace_views.get_langfuse_client", return_value=fake):
+                    response = self.client.get(reverse(route, args=args))
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "—")
+
+        with patch("history.trace_views.get_langfuse_client", return_value=fake):
+            dashboard = self.client.get(reverse("trace-dashboard"))
+            models = self.client.get(reverse("trace-model-analytics"))
+            trace = self.client.get(reverse("trace-detail", args=["trace-missing"]))
+            selected = self.client.get(
+                reverse("trace-detail", args=["trace-missing"]),
+                {"step": "generation-missing"},
+            )
+
+        self.assertFalse(dashboard.context["metrics"]["has_tokens"])
+        self.assertEqual(dashboard.context["metrics"]["tokens_display"], "—")
+        self.assertEqual(dashboard.context["metrics"]["cost_display"], "—")
+        self.assertEqual(models.context["recent_calls"][0]["tokens_display"], "—")
+        self.assertEqual(models.context["recent_calls"][0]["cost_display"], "—")
+        self.assertEqual(trace.context["summary"]["tokens_display"], "—")
+        self.assertEqual(trace.context["summary"]["cost_display"], "—")
+        generation = next(
+            item for item in trace.context["observations"] if item["id"] == "generation-missing"
+        )
+        self.assertEqual(generation["tokens_display"], "—")
+        self.assertEqual(generation["cost_display"], "—")
+        self.assertContains(selected, "— tokens")
 
     def test_empty_dashboard_retains_shell_and_upload_guidance(self):
         with patch(

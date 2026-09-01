@@ -25,6 +25,7 @@ def observation(
     ended: str = "2026-08-25T10:00:02Z",
     usage: dict | None = None,
     total_cost=...,
+    cost_details=...,
     level: str = "DEFAULT",
     session_id: str = "session-a",
     trace_id: str = "trace-a",
@@ -36,8 +37,17 @@ def observation(
         "providedModelName": model,
         "startTime": started,
         "endTime": ended,
-        "usageDetails": usage or {},
-        "costDetails": {},
+        "usageDetails": usage if usage is not None else {},
+        "inputUsage": 0,
+        "outputUsage": 0,
+        "totalUsage": 0,
+        "costDetails": (
+            {"total": total_cost}
+            if cost_details is ... and total_cost is not ...
+            else {}
+            if cost_details is ...
+            else cost_details
+        ),
         "level": level,
         "sessionId": session_id,
         "traceId": trace_id,
@@ -164,6 +174,63 @@ class TraceAnalyticsTests(SimpleTestCase):
         costs = {model["name"]: model["cost_display"] for model in result["models"]}
         self.assertEqual(costs["nvidia/nemotron-3-ultra-550b-a55b"], "$0")
         self.assertEqual(costs["openai/gpt-5.5"], "<$0.000001")
+
+    def test_missing_usage_is_unavailable_while_explicit_zero_remains_zero(self):
+        missing = observation(
+            "missing",
+            model="deepseek-v4-flash",
+            usage=None,
+            total_cost=0,
+            cost_details={},
+        )
+        explicit_zero = observation(
+            "explicit-zero",
+            model="openai/gpt-free",
+            usage={"total": 0},
+            total_cost=0,
+            cost_details={"total": 0},
+            session_id="session-b",
+            trace_id="trace-b",
+        )
+
+        dashboard = build_dashboard(
+            [missing],
+            days=30,
+            now=NOW,
+            query="",
+            metric="tokens",
+            granularity="day",
+            chart="bar",
+        )
+        models = build_model_analytics(
+            [missing, explicit_zero],
+            days=30,
+            now=NOW,
+            model="all",
+            metric="tokens",
+            granularity="day",
+            chart="distribution",
+        )
+
+        self.assertFalse(dashboard["metrics"]["has_tokens"])
+        self.assertEqual(dashboard["metrics"]["tokens_display"], "—")
+        self.assertEqual(dashboard["metrics"]["cost_display"], "—")
+        self.assertEqual(dashboard["models"][0]["tokens_display"], "—")
+        self.assertEqual(dashboard["sessions"][0]["tokens_display"], "—")
+
+        by_model = {row["name"]: row for row in models["models"]}
+        self.assertFalse(by_model["deepseek-v4-flash"]["has_tokens"])
+        self.assertEqual(by_model["deepseek-v4-flash"]["tokens_display"], "—")
+        self.assertEqual(by_model["deepseek-v4-flash"]["cost_display"], "—")
+        self.assertTrue(by_model["openai/gpt-free"]["has_tokens"])
+        self.assertEqual(by_model["openai/gpt-free"]["tokens_display"], "0")
+        self.assertEqual(by_model["openai/gpt-free"]["cost_display"], "$0")
+
+        recent = {row["model"]: row for row in models["recent_calls"]}
+        self.assertEqual(recent["deepseek-v4-flash"]["tokens_display"], "—")
+        self.assertEqual(recent["deepseek-v4-flash"]["cost_display"], "—")
+        self.assertEqual(recent["openai/gpt-free"]["tokens_display"], "0")
+        self.assertEqual(recent["openai/gpt-free"]["cost_display"], "$0")
 
     def test_nonzero_trend_bars_end_on_the_shared_svg_baseline(self):
         result = build_dashboard(

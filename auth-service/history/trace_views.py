@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from datetime import timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from urllib.parse import urlencode
 
 from django.http import Http404
@@ -23,6 +23,8 @@ from .trace_analytics import (
     build_model_analytics,
     format_cost,
     format_tokens,
+    observation_cost,
+    observation_usage,
     parse_analytics_query,
 )
 
@@ -30,32 +32,35 @@ from .trace_analytics import (
 ALLOWED_DAY_RANGES = {7, 30, 90}
 
 
-def _number(value) -> Decimal:
-    try:
-        parsed = Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError):
-        return Decimal(0)
-    return parsed if parsed.is_finite() and parsed >= 0 else Decimal(0)
+def _usage_total(item: dict) -> tuple[int, bool]:
+    usage = observation_usage(item)
+    return int(usage["total"]), bool(usage["has_total"])
 
 
-def _usage_total(item: dict) -> int:
-    details = item.get("usageDetails")
-    if not isinstance(details, dict):
-        return 0
-    if "total" in details:
-        return int(_number(details.get("total")))
-    return int(sum((_number(value) for value in details.values()), Decimal(0)))
+def _cost_total(item: dict) -> tuple[Decimal, bool]:
+    return observation_cost(item)
 
 
-def _cost_total(item: dict) -> Decimal:
-    if item.get("totalCost") is not None:
-        return _number(item.get("totalCost"))
-    details = item.get("costDetails")
-    if not isinstance(details, dict):
-        return Decimal(0)
-    if "total" in details:
-        return _number(details.get("total"))
-    return sum((_number(value) for value in details.values()), Decimal(0))
+def _generation_metrics(items: list[dict]) -> dict:
+    generations = [
+        item for item in items if str(item.get("type") or "").upper() == "GENERATION"
+    ]
+    usage_values = [_usage_total(item) for item in generations]
+    cost_values = [_cost_total(item) for item in generations]
+    has_tokens = not generations or any(has_value for _, has_value in usage_values)
+    has_cost = not generations or any(has_value for _, has_value in cost_values)
+    tokens = sum(value for value, has_value in usage_values if has_value)
+    cost = sum(
+        (value for value, has_value in cost_values if has_value), Decimal(0)
+    )
+    return {
+        "tokens": tokens,
+        "has_tokens": has_tokens,
+        "tokens_display": format_tokens(tokens) if has_tokens else "—",
+        "cost": cost,
+        "has_cost": has_cost,
+        "cost_display": format_cost(cost) if has_cost else "—",
+    }
 
 
 def _parsed_time(value):
@@ -287,8 +292,15 @@ def _decorate_observations(items: list[dict]) -> list[dict]:
         rendered["input_display"] = _pretty(item.get("input"))
         rendered["output_display"] = _pretty(item.get("output"))
         rendered["metadata_display"] = _pretty(item.get("metadata"))
-        rendered["tokens"] = _usage_total(item)
-        rendered["cost_display"] = format_cost(_cost_total(item))
+        is_generation = str(item.get("type") or "").upper() == "GENERATION"
+        tokens, has_tokens = _usage_total(item) if is_generation else (0, False)
+        cost, has_cost = _cost_total(item) if is_generation else (Decimal(0), False)
+        rendered["tokens"] = tokens
+        rendered["has_tokens"] = has_tokens
+        rendered["tokens_display"] = format_tokens(tokens) if has_tokens else "—"
+        rendered["cost"] = cost
+        rendered["has_cost"] = has_cost
+        rendered["cost_display"] = format_cost(cost) if has_cost else "—"
         rendered["kind"] = _observation_kind(item)
         rendered["kind_label"] = {
             "agent": "Agent",
@@ -413,8 +425,7 @@ def _trace_row(trace_id: str, trace_items: list[dict]) -> dict:
             if item["kind"] == "tool"
         )
     )
-    tokens = sum(item["tokens"] for item in observations)
-    cost = sum((_cost_total(item) for item in trace_items), Decimal(0))
+    metrics = _generation_metrics(trace_items)
     return {
         "id": trace_id,
         "name": str(root.get("traceName") or root.get("name") or "Agent trace"),
@@ -425,10 +436,7 @@ def _trace_row(trace_id: str, trace_items: list[dict]) -> dict:
         "tools": tools,
         "tool_count": sum(item["kind"] == "tool" for item in observations),
         "observation_count": len(observations),
-        "tokens": tokens,
-        "tokens_display": format_tokens(tokens),
-        "cost": cost,
-        "cost_display": format_cost(cost),
+        **metrics,
         "duration_display": _duration_display(_trace_duration_seconds(trace_items)),
         "errors": sum(item["is_error"] for item in observations),
     }
@@ -462,7 +470,10 @@ def _session_index_context(items: list[dict], *, days: int, query: str) -> dict:
                 if item["kind"] == "tool"
             )
         )
-        cost = sum((trace["cost"] for trace in traces), Decimal(0))
+        cost = sum((trace["cost"] for trace in traces if trace["has_cost"]), Decimal(0))
+        has_cost = any(trace["has_cost"] for trace in traces)
+        tokens = sum(trace["tokens"] for trace in traces if trace["has_tokens"])
+        has_tokens = any(trace["has_tokens"] for trace in traces)
         latest = traces[-1]
         row = {
             "id": session_key,
@@ -471,9 +482,12 @@ def _session_index_context(items: list[dict], *, days: int, query: str) -> dict:
             "last_activity": latest["started_at"],
             "trace_count": len(traces),
             "step_count": len(all_observations),
-            "tokens": sum(trace["tokens"] for trace in traces),
-            "tokens_display": format_tokens(sum(trace["tokens"] for trace in traces)),
-            "cost_display": format_cost(cost),
+            "tokens": tokens,
+            "has_tokens": has_tokens,
+            "tokens_display": format_tokens(tokens) if has_tokens else "—",
+            "cost": cost,
+            "has_cost": has_cost,
+            "cost_display": format_cost(cost) if has_cost else "—",
             "errors": sum(trace["errors"] for trace in traces),
             "models": models,
             "tools": tools,
@@ -588,19 +602,17 @@ def _trace_detail_context(
         (item for item in observations if item.get("isRootObservation")),
         observations[0],
     )
+    metrics = _generation_metrics(items)
     summary = {
         "status": "Error" if any(item["is_error"] for item in observations) else "Complete",
         "duration_seconds": duration,
         "duration_display": _duration_display(duration),
         "llm_calls": sum(item["kind"] == "llm" for item in observations),
         "tool_calls": sum(item["kind"] == "tool" for item in observations),
-        "tokens": sum(item["tokens"] for item in observations),
-        "cost": sum((_cost_total(item) for item in items), Decimal(0)),
+        **metrics,
         "errors": sum(item["is_error"] for item in observations),
         "started_at": root.get("startTime"),
     }
-    summary["cost_display"] = format_cost(summary["cost"])
-    summary["tokens_display"] = format_tokens(summary["tokens"])
     content_blocks = _content_blocks(observations, root)
     steps = _inspector_steps(observations, root, content_blocks)
     selected_step = next(
