@@ -171,6 +171,49 @@ class UserMemoryPool(models.Model):
         return f"Memory pool for {self.owner}"
 
 
+class MemoryIngestJob(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+        DELETED = "deleted", "Deleted"
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="memory_ingest_jobs",
+    )
+    session = models.ForeignKey(
+        "history.HistorySession",
+        on_delete=models.PROTECT,
+        related_name="memory_ingest_jobs",
+    )
+    source_key = models.CharField(max_length=128, unique=True)
+    message_ids = models.JSONField(default=list)
+    chunk_index = models.PositiveIntegerField(default=0)
+    chunk_count = models.PositiveIntegerField(default=1)
+    content_sha256 = models.CharField(max_length=64)
+    redaction_version = models.CharField(max_length=32, default="v1")
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+    mem0_memory_ids = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["status", "next_attempt_at"], name="memory_job_status_idx"),
+            models.Index(fields=["owner", "session"], name="memory_job_owner_session_idx"),
+        ]
+
+    def __str__(self):
+        return f"Memory job {self.source_key} ({self.status})"
+
+
 class HistoryMessage(models.Model):
     session = models.ForeignKey(
         HistorySession,

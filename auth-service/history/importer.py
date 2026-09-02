@@ -452,6 +452,7 @@ def import_history(uploaded_file, *, owner, uploader) -> ImportResult:
         imported_sessions = 0
         skipped_sessions = 0
         imported_messages = 0
+        created_sessions = []
         with transaction.atomic():
             imported_rows = []
             for row in prepared_rows:
@@ -487,6 +488,7 @@ def import_history(uploaded_file, *, owner, uploader) -> ImportResult:
                     [HistoryMessage(session=session, **message) for message in messages]
                 )
                 imported_rows.append((session, row, True))
+                created_sessions.append(session)
                 imported_sessions += 1
                 imported_messages += len(messages)
 
@@ -552,6 +554,15 @@ def import_history(uploaded_file, *, owner, uploader) -> ImportResult:
 
             for child_pk, parent_pk in parent_updates.items():
                 HistorySession.objects.filter(pk=child_pk).update(parent_session_id=parent_pk)
+
+            if getattr(settings, "MEMORY_OUTBOX_ENABLED", False):
+                # Keep Mem0/LLM calls out of the upload request.  The job rows
+                # are committed together with the source messages and can be
+                # safely retried by the dedicated worker.
+                from .memory_service import enqueue_session_memory_jobs
+
+                for session in created_sessions:
+                    enqueue_session_memory_jobs(session)
     except ImportValidationError as exc:
         batch.status = ImportBatch.Status.FAILED
         batch.error_summary = str(exc)[:1000]
