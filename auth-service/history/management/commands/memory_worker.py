@@ -19,12 +19,13 @@ class Command(BaseCommand):
         parser.add_argument("--sleep-seconds", type=float, default=5.0)
         parser.add_argument("--max-attempts", type=int, default=8)
 
-    def _claim_job(self):
+    def _claim_job(self, max_attempts: int):
         now = timezone.now()
         with transaction.atomic():
             job = (
                 MemoryIngestJob.objects.select_for_update()
                 .filter(status__in=[MemoryIngestJob.Status.PENDING, MemoryIngestJob.Status.FAILED])
+                .filter(attempts__lt=max_attempts)
                 .filter(Q(next_attempt_at__isnull=True) | Q(next_attempt_at__lte=now))
                 .select_related("owner", "session")
                 .order_by("created_at", "id")
@@ -87,14 +88,15 @@ class Command(BaseCommand):
             self.stdout.write("MEMORY_ENABLED is false; no jobs processed")
             return
         batch_size = max(1, min(options["batch_size"], 100))
+        max_attempts = max(1, options["max_attempts"])
         processed = 0
         while True:
             current = 0
             while current < batch_size:
-                job = self._claim_job()
+                job = self._claim_job(max_attempts)
                 if job is None:
                     break
-                self._process_one(job, max(1, options["max_attempts"]))
+                self._process_one(job, max_attempts)
                 processed += 1
                 current += 1
             if options["once"]:
