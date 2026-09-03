@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta
 from itertools import chain
 
@@ -24,16 +25,26 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.timezone import is_aware, make_naive
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
-from .auth_views import hermes_session_required
+from .auth_views import _json_payload, _json_response, hermes_session_required
 from .forms import HistoryImportForm, MemoryPoolForm
 from .importer import ImportValidationError, import_history
-from .models import HistoryMessage, HistorySession, UserMemoryPool
+from .memory_service import (
+    MemoryIdentityError,
+    MemoryNotFound,
+    MemoryUnavailable,
+    delete_all_memories,
+    delete_memory,
+    list_memories,
+    search_memories,
+)
+from .models import HistoryMessage, HistorySession, MemoryIngestJob, UserMemoryPool
 from .presentation import build_history_presentation, render_message_markdown
 from .usage import build_context_allocation
 
 PAGE_SIZE = 25
+logger = logging.getLogger(__name__)
 USAGE_FIELDS = (
     "input_tokens",
     "output_tokens",
@@ -572,3 +583,67 @@ def memory_pool(request):
             "user_html": render_message_markdown(pool.user_markdown),
         },
     )
+
+
+def _memory_api_error(error: Exception):
+    if isinstance(error, MemoryIdentityError):
+        return _json_response({"detail": str(error)}, status=409)
+    if isinstance(error, MemoryNotFound):
+        return _json_response({"detail": "memory_not_found"}, status=404)
+    if isinstance(error, MemoryUnavailable):
+        return _json_response({"detail": "memory_unavailable"}, status=503)
+    if isinstance(error, ValueError):
+        return _json_response({"detail": str(error)}, status=400)
+    logger.exception("Unexpected Mem0 request failure")
+    return _json_response({"detail": "memory_unavailable"}, status=503)
+
+
+@hermes_session_required
+@require_POST
+def memory_search_api(request):
+    payload, error = _json_payload(request)
+    if error:
+        return error
+    query = payload.get("query")
+    if not isinstance(query, str):
+        return _json_response({"detail": "query_required"}, status=400)
+    try:
+        limit = payload.get("limit", 5)
+        results = search_memories(user=request.user, query=query, limit=int(limit))
+    except Exception as exc:
+        return _memory_api_error(exc)
+    return _json_response({"results": results})
+
+
+@hermes_session_required
+@require_GET
+def memory_list_api(request):
+    try:
+        results = list_memories(user=request.user)
+    except Exception as exc:
+        return _memory_api_error(exc)
+    return _json_response({"results": results})
+
+
+@hermes_session_required
+@require_http_methods(["DELETE"])
+def memory_delete_api(request, memory_id: str):
+    try:
+        delete_memory(user=request.user, memory_id=memory_id)
+    except Exception as exc:
+        return _memory_api_error(exc)
+    return _json_response({"deleted": True})
+
+
+@hermes_session_required
+@require_http_methods(["DELETE"])
+def memory_delete_all_api(request):
+    try:
+        delete_all_memories(user=request.user)
+        MemoryIngestJob.objects.filter(owner=request.user).update(
+            status=MemoryIngestJob.Status.DELETED,
+            mem0_memory_ids=[],
+        )
+    except Exception as exc:
+        return _memory_api_error(exc)
+    return _json_response({"deleted": True, "scope": "user"})

@@ -237,6 +237,17 @@ if ENVIRONMENT == "production" and (
     raise ImproperlyConfigured(
         "LANGFUSE_PROJECT_PUBLIC_KEY and LANGFUSE_PROJECT_SECRET_KEY are required in production"
     )
+
+# Mem0 is deliberately opt-in.  The outbox can be enabled independently so
+# operators can enqueue a backfill before enabling provider calls.
+MEMORY_ENABLED = env_bool("MEMORY_ENABLED", False)
+MEMORY_OUTBOX_ENABLED = env_bool("MEMORY_OUTBOX_ENABLED", MEMORY_ENABLED)
+MEMORY_OLLAMA_BASE_URL = os.getenv("MEMORY_OLLAMA_BASE_URL", "http://ollama:11434").strip()
+MEMORY_MEM0_DIR = os.getenv("MEMORY_MEM0_DIR", "/data/mem0").strip()
+MEMORY_TELEMETRY = env_bool("MEMORY_TELEMETRY", False)
+MEMORY_OPENAI_BASE_URL = os.getenv("MEMORY_OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+MEMORY_RERANK_ENABLED = env_bool("MEMORY_RERANK_ENABLED", False)
+MEMORY_RERANK_TOP_K = int(os.getenv("MEMORY_RERANK_TOP_K", "5"))
 SECURE_SSL_REDIRECT = not DEBUG
 SECURE_HSTS_SECONDS = 0 if DEBUG else 3600
 SECURE_HSTS_INCLUDE_SUBDOMAINS = False

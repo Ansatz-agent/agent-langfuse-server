@@ -121,3 +121,15 @@ class DeploymentFileTests(SimpleTestCase):
         self.assertIn("匿名访问 `/agent/history/` 必须跳转登录", guide)
         self.assertIn("8080 和 9000 仍绑定", guide)
         self.assertNotIn("PRIVATE KEY", guide)
+
+    def test_mem0_production_runbook_requires_all_compose_overlays(self):
+        report = (PROJECT_ROOT / "MEM0_IMPLEMENTATION_REPORT.md").read_text()
+
+        # The SJTU overlay owns the loopback port publication consumed by
+        # OpenResty.  Keep the exact three-file command in the checked-in
+        # runbook so a future Mem0 rollout cannot silently omit it.
+        self.assertIn("-f deploy/docker-compose.yml", report)
+        self.assertIn("-f deploy/docker-compose.sjtu.yml", report)
+        self.assertIn("-f deploy/docker-compose.mem0.yml", report)
+        self.assertIn("config --quiet", report)
+        self.assertIn("docker-compose.sjtu.yml` 不能省略", report)

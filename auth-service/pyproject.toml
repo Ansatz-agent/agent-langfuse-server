@@ -9,6 +9,9 @@ dependencies = [
   "gunicorn==23.0.0",
   "markdown-it-py==4.2.0",
   "whitenoise==6.12.0",
+  "mem0ai==2.0.19",
+  "ollama>=0.3.0,<1.0.0",
+  "psycopg[binary,pool]>=3.2.8,<4.0.0",
 ]
 
 [dependency-groups]
