@@ -176,16 +176,27 @@ def enqueue_session_memory_jobs(session: HistorySession) -> int:
     return created
 
 
-def _provider_config(provider: str, model: str) -> dict:
+def _provider_config(
+    provider: str,
+    model: str,
+    *,
+    base_url_env: str = "MEMORY_OPENAI_BASE_URL",
+    api_key_env: str = "MEMORY_PROVIDER_API_KEY",
+) -> dict:
     config = {"model": model}
     if provider == "ollama":
         config["ollama_base_url"] = getattr(settings, "MEMORY_OLLAMA_BASE_URL", "http://ollama:11434")
     else:
-        api_key = os.getenv("MEMORY_PROVIDER_API_KEY", "").strip()
+        api_key = os.getenv(api_key_env, "").strip()
+        if not api_key and api_key_env != "MEMORY_PROVIDER_API_KEY":
+            api_key = os.getenv("MEMORY_PROVIDER_API_KEY", "").strip()
         if api_key:
             config["api_key"] = api_key
         if provider == "openai":
-            config["openai_base_url"] = getattr(
+            base_url = os.getenv(base_url_env, "").strip()
+            if not base_url and base_url_env != "MEMORY_OPENAI_BASE_URL":
+                base_url = os.getenv("MEMORY_OPENAI_BASE_URL", "").strip()
+            config["openai_base_url"] = base_url or getattr(
                 settings, "MEMORY_OPENAI_BASE_URL", "https://api.openai.com/v1"
             )
     return {"provider": provider, "config": config}
@@ -219,6 +230,8 @@ def get_memory():
     llm_config = _provider_config(
         os.getenv("MEMORY_LLM_PROVIDER", "ollama").strip(),
         os.getenv("MEMORY_LLM_MODEL", "llama3.1:8b").strip(),
+        base_url_env="MEMORY_LLM_OPENAI_BASE_URL",
+        api_key_env="MEMORY_LLM_API_KEY",
     )
     # Keep extraction responses bounded for large historical chunks.  The
     # JSON extraction normally needs far fewer tokens than the SDK default;
@@ -241,6 +254,8 @@ def get_memory():
         "embedder": _provider_config(
             os.getenv("MEMORY_EMBEDDER_PROVIDER", "ollama").strip(),
             os.getenv("MEMORY_EMBEDDER_MODEL", "nomic-embed-text").strip(),
+            base_url_env="MEMORY_EMBEDDER_OPENAI_BASE_URL",
+            api_key_env="MEMORY_EMBEDDER_API_KEY",
         ),
     }
     if getattr(settings, "MEMORY_RERANK_ENABLED", False):
@@ -248,7 +263,12 @@ def get_memory():
         if not judge_model:
             raise MemoryUnavailable("memory_judge_model_not_configured")
         judge_provider = os.getenv("MEMORY_JUDGE_PROVIDER", "openai").strip()
-        judge_llm = _provider_config(judge_provider, judge_model)
+        judge_llm = _provider_config(
+            judge_provider,
+            judge_model,
+            base_url_env="MEMORY_JUDGE_OPENAI_BASE_URL",
+            api_key_env="MEMORY_JUDGE_API_KEY",
+        )
         config["reranker"] = {
             "provider": "llm_reranker",
             "config": {

@@ -58,15 +58,20 @@ SQLite 中的历史数据不会被 Mem0 覆盖。每个 HistorySession 生成确
 
 ### 3.4 DashScope 模型映射
 
-通过 Mem0 的 OpenAI-compatible provider，三个组件使用同一个 DashScope base URL：
+通过 Mem0 的 OpenAI-compatible provider，三个组件默认使用同一个 DashScope base URL；如需故障切换，可为 LLM、Embedding 和 judger 分别配置 endpoint 与 API key，避免 Embedding 能力不足时影响整个记忆链路：
 
 | 组件 | 配置 |
 |---|---|
 | 记忆分析 LLM | `ZHIPU/GLM-5.3-Flash` |
 | Embedding | `qwen3.7-text-embedding-flash`，1024 维 |
 | Search judger/reranker | `qwen3.8-flash`，Mem0 `llm_reranker`，`top_k=5` |
-| Base URL | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| 凭据 | `MEMORY_PROVIDER_API_KEY`，仅位于远端 `server.env`（0600） |
+| 默认 Base URL | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| 默认凭据 | `MEMORY_PROVIDER_API_KEY`，仅位于远端 `server.env`（0600） |
+
+角色级覆盖变量为 `MEMORY_LLM_OPENAI_BASE_URL` / `MEMORY_LLM_API_KEY`、
+`MEMORY_EMBEDDER_OPENAI_BASE_URL` / `MEMORY_EMBEDDER_API_KEY` 和
+`MEMORY_JUDGE_OPENAI_BASE_URL` / `MEMORY_JUDGE_API_KEY`。未设置角色级变量时，
+代码回退到上述默认值。
 
 这里的“judger”落到 Mem0 官方配置中的 `llm_reranker`，只在搜索候选记忆时进行相关性重排，不替代记忆提取 LLM。
 

@@ -1,7 +1,9 @@
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from history.memory_service import enqueue_session_memory_jobs, memory_chunks
+from history.memory_service import _provider_config, enqueue_session_memory_jobs, memory_chunks
 from history.models import HistoryMessage, HistorySession, MemoryIngestJob
 
 
@@ -53,3 +55,45 @@ class MemoryServiceTests(TestCase):
         job = MemoryIngestJob.objects.get()
         self.assertEqual(job.owner_id, self.user.pk)
         self.assertEqual(job.message_ids, [HistoryMessage.objects.get().pk])
+
+    def test_provider_config_supports_role_specific_endpoint_and_key(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "MEMORY_OPENAI_BASE_URL": "https://primary.example/v1",
+                "MEMORY_PROVIDER_API_KEY": "primary-key",
+                "MEMORY_LLM_OPENAI_BASE_URL": "https://alternate.example/v1",
+                "MEMORY_LLM_API_KEY": "alternate-key",
+            },
+            clear=False,
+        ):
+            config = _provider_config(
+                "openai",
+                "alternate-model",
+                base_url_env="MEMORY_LLM_OPENAI_BASE_URL",
+                api_key_env="MEMORY_LLM_API_KEY",
+            )
+
+        self.assertEqual(config["config"]["openai_base_url"], "https://alternate.example/v1")
+        self.assertEqual(config["config"]["api_key"], "alternate-key")
+
+    def test_provider_config_falls_back_to_primary_for_embedding(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "MEMORY_OPENAI_BASE_URL": "https://primary.example/v1",
+                "MEMORY_PROVIDER_API_KEY": "primary-key",
+                "MEMORY_EMBEDDER_OPENAI_BASE_URL": "",
+                "MEMORY_EMBEDDER_API_KEY": "",
+            },
+            clear=False,
+        ):
+            config = _provider_config(
+                "openai",
+                "embedding-model",
+                base_url_env="MEMORY_EMBEDDER_OPENAI_BASE_URL",
+                api_key_env="MEMORY_EMBEDDER_API_KEY",
+            )
+
+        self.assertEqual(config["config"]["openai_base_url"], "https://primary.example/v1")
+        self.assertEqual(config["config"]["api_key"], "primary-key")
