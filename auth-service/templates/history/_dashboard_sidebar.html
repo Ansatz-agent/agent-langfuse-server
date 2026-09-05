@@ -12,6 +12,7 @@
     <a{% if active_page == "history" %} class="is-active"{% endif %} href="{% url 'history:session-list' %}"><span aria-hidden="true">◫</span>会话历史</a>
     <a{% if active_page == "usage" %} class="is-active"{% endif %} href="{% url 'history:usage-dashboard' %}"><span aria-hidden="true">◒</span>Token 用量</a>
     <a href="{% url 'history:memory-pool' %}"><span aria-hidden="true">◇</span>Memory Pool</a>
+    {% if request.user.is_superuser %}<a{% if active_page == "memories" %} class="is-active"{% endif %} href="{% url 'history:memory-catalog' %}"><span aria-hidden="true">✦</span>抽取记忆</a>{% endif %}
     <a href="{% url 'history:session-import' %}"><span aria-hidden="true">↥</span>导入历史</a>
     <a href="{% url 'history:history-synthesis' %}"><span aria-hidden="true">◎</span>历史总结 <small>预留</small></a>
     <a href="{% url 'history:api-credits' %}"><span aria-hidden="true">¤</span>API 充值 <small>预留</small></a>

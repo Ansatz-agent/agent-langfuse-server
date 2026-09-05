@@ -36,6 +36,7 @@ from .memory_service import (
     MemoryUnavailable,
     delete_all_memories,
     delete_memory,
+    list_all_memories,
     list_memories,
     search_memories,
 )
@@ -562,6 +563,7 @@ def memory_pool(request):
             "user_markdown": pool.user_markdown,
         },
     )
+
     if request.method == "POST" and form.is_valid():
         update_fields = []
         for field_name in ("memory_markdown", "user_markdown"):
@@ -583,6 +585,22 @@ def memory_pool(request):
             "user_html": render_message_markdown(pool.user_markdown),
         },
     )
+
+
+@hermes_session_required
+def memory_catalog(request):
+    if not request.user.is_superuser:
+        raise Http404
+    try:
+        memories = list_all_memories(requester=request.user)
+    except Exception as exc:
+        return render(
+            request,
+            "history/memory_catalog.html",
+            {"memories": [], "memory_error": str(exc)},
+            status=503,
+        )
+    return render(request, "history/memory_catalog.html", {"memories": memories})
 
 
 def _memory_api_error(error: Exception):

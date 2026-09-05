@@ -3,8 +3,13 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from history.memory_service import _provider_config, enqueue_session_memory_jobs, memory_chunks
-from history.models import HistoryMessage, HistorySession, MemoryIngestJob
+from history.memory_service import (
+    _provider_config,
+    enqueue_session_memory_jobs,
+    list_all_memories,
+    memory_chunks,
+)
+from history.models import AccountIdentity, HistoryMessage, HistorySession, MemoryIngestJob
 
 
 class MemoryServiceTests(TestCase):
@@ -101,3 +106,27 @@ class MemoryServiceTests(TestCase):
 
         self.assertEqual(config["config"]["openai_base_url"], "https://primary.example/v1")
         self.assertEqual(config["config"]["api_key"], "primary-key")
+
+    def test_list_all_memories_attaches_session_and_owner(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
+        AccountIdentity.objects.create(user=self.user)
+        HistoryMessage.objects.create(session=self.session, role="user", content="Remember this.")
+        enqueue_session_memory_jobs(self.session)
+        job = MemoryIngestJob.objects.get()
+        job.mem0_memory_ids = ["memory-1"]
+        job.save(update_fields=["mem0_memory_ids"])
+
+        class FakeMemory:
+            def get_all(self, *, filters, top_k):
+                self.filters = filters
+                self.top_k = top_k
+                return {"results": [{"id": "memory-1", "memory": "Likes apples", "metadata": {}}]}
+
+        with patch("history.memory_service.get_memory", return_value=FakeMemory()):
+            memories = list_all_memories(requester=self.user)
+
+        self.assertEqual(len(memories), 1)
+        self.assertEqual(memories[0]["memory"], "Likes apples")
+        self.assertEqual(memories[0]["user"], self.user.username)
+        self.assertEqual(memories[0]["session"], self.session)

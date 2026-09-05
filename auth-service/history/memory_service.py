@@ -11,7 +11,7 @@ from django.conf import settings
 
 from .client_sessions import account_identity_for_user
 from .importer import redact_text
-from .models import HistoryMessage, HistorySession, MemoryIngestJob
+from .models import AccountIdentity, HistoryMessage, HistorySession, MemoryIngestJob
 from .presentation import is_hermes_context_artifact, is_hermes_control_event
 
 logger = logging.getLogger(__name__)
@@ -373,6 +373,64 @@ def search_memories(*, user, query: str, limit: int = 5):
 def list_memories(*, user):
     result = get_memory().get_all(filters={"user_id": account_memory_id(user)})
     return result.get("results", result.get("memories", [])) if isinstance(result, dict) else result
+
+
+def list_all_memories(*, requester) -> list[dict]:
+    """Return every extracted memory with its local session and owner context."""
+    if not getattr(requester, "is_superuser", False):
+        raise MemoryNotFound("memory_not_found")
+
+    memory = get_memory()
+    identities = AccountIdentity.objects.select_related("user").all()
+    jobs = list(
+        MemoryIngestJob.objects.filter(mem0_memory_ids__isnull=False)
+        .select_related("owner", "session")
+        .order_by("created_at", "id")
+    )
+    by_memory_id: dict[str, MemoryIngestJob] = {}
+    for job in jobs:
+        if isinstance(job.mem0_memory_ids, list):
+            for memory_id in job.mem0_memory_ids:
+                if isinstance(memory_id, str) and memory_id:
+                    by_memory_id.setdefault(memory_id, job)
+
+    rows: list[dict] = []
+    for identity in identities:
+        result = memory.get_all(filters={"user_id": str(identity.account_id)}, top_k=1000)
+        values = (
+            result.get("results", result.get("memories", []))
+            if isinstance(result, dict)
+            else result
+        )
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            memory_id = value.get("id") or value.get("memory_id")
+            if not isinstance(memory_id, str) or not memory_id:
+                continue
+            job = by_memory_id.get(memory_id)
+            metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+            session = job.session if job else None
+            owner = job.owner if job else identity.user
+            rows.append(
+                {
+                    "id": memory_id,
+                    "memory": (
+                        value.get("memory")
+                        or value.get("text")
+                        or value.get("content")
+                        or ""
+                    ),
+                    "created_at": value.get("created_at") or value.get("createdAt"),
+                    "user": owner.username,
+                    "user_id": owner.pk,
+                    "session": session,
+                    "metadata": metadata,
+                }
+            )
+    return rows
 
 
 def owned_memory_ids(*, user) -> set[str]:

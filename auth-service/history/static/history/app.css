@@ -219,6 +219,16 @@ button.primary, .primary { background: #5e6ad2; border-color: #5e6ad2; }
 .primary-button:hover { background: rgba(113, 112, 255, .3); }
 .memory-preview details { padding: .7rem; border: 1px solid var(--border); border-radius: .5rem; }
 .memory-preview summary { color: var(--muted); cursor: pointer; }
+.memory-catalog { display: grid; gap: .7rem; }
+.memory-catalog-card { padding: 1rem; border: 1px solid var(--border); border-radius: .75rem; background: rgba(255, 255, 255, .018); box-shadow: 0 12px 35px rgba(0, 0, 0, .1); }
+.memory-catalog-card-header { display: flex; gap: .8rem; align-items: flex-start; }
+.memory-catalog-mark { display: grid; place-items: center; flex: 0 0 auto; width: 2rem; height: 2rem; border: 1px solid rgba(113, 112, 255, .35); border-radius: .6rem; color: #b7b6ff; background: rgba(113, 112, 255, .1); }
+.memory-catalog-card h2 { margin: .18rem 0 0; color: var(--text); font-size: 1rem; font-weight: 500; line-height: 1.5; }
+.memory-catalog-meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 1rem 0 0 2.8rem; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: .55rem; background: var(--border-subtle); }
+.memory-catalog-meta > div { min-width: 0; padding: .6rem .7rem; background: rgba(255, 255, 255, .018); }
+.memory-catalog-meta dt { color: var(--subtle); font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; }
+.memory-catalog-meta dd { margin: .2rem 0 0; overflow-wrap: anywhere; color: var(--text-secondary); font-size: .75rem; }
+.memory-catalog-meta code { color: #b7b6ff; font-size: .67rem; }
 .form-error { margin: 0; color: #fca5a5; font-size: .8rem; }
 
 .dashboard-shell { display: grid; grid-template-columns: 14rem minmax(0, 1fr); gap: 1.25rem; align-items: start; }
@@ -454,6 +464,7 @@ button.primary, .primary { background: #5e6ad2; border-color: #5e6ad2; }
   .history-dashboard-search { grid-template-columns: auto minmax(0, 1fr) auto; }
   .history-dashboard-search > a { display: none; }
   .memory-pool-grid { grid-template-columns: 1fr; }
+  .memory-catalog-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-left: 0; }
   .reserved-feature-grid { grid-template-columns: 1fr; }
   .reserved-feature-notice { align-items: flex-start; flex-direction: column; }
   .filter-sidebar { position: static; }
@@ -476,6 +487,7 @@ button.primary, .primary { background: #5e6ad2; border-color: #5e6ad2; }
   .history-session-row { grid-template-columns: 1.7rem minmax(0, 1fr) 1rem; padding-right: .7rem; padding-left: .7rem; }
   .history-session-stats { display: none; }
   .history-dashboard-search { margin-right: .65rem; margin-left: .65rem; }
+  .memory-catalog-meta { grid-template-columns: 1fr; }
   .history-dashboard-pagination { gap: .5rem; }
   .usage-overview { padding: .75rem; }
   .usage-token-grid { grid-template-columns: 1fr 1fr; }
