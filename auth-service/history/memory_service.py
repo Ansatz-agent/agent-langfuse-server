@@ -182,6 +182,8 @@ def _provider_config(
     *,
     base_url_env: str = "MEMORY_OPENAI_BASE_URL",
     api_key_env: str = "MEMORY_PROVIDER_API_KEY",
+    reasoning_effort: str | None = None,
+    is_reasoning_model: bool | None = None,
 ) -> dict:
     config = {"model": model}
     if provider == "ollama":
@@ -199,6 +201,10 @@ def _provider_config(
             config["openai_base_url"] = base_url or getattr(
                 settings, "MEMORY_OPENAI_BASE_URL", "https://api.openai.com/v1"
             )
+            if reasoning_effort:
+                config["reasoning_effort"] = reasoning_effort
+            if is_reasoning_model is not None:
+                config["is_reasoning_model"] = is_reasoning_model
     return {"provider": provider, "config": config}
 
 
@@ -232,6 +238,8 @@ def get_memory():
         os.getenv("MEMORY_LLM_MODEL", "llama3.1:8b").strip(),
         base_url_env="MEMORY_LLM_OPENAI_BASE_URL",
         api_key_env="MEMORY_LLM_API_KEY",
+        reasoning_effort=os.getenv("MEMORY_REASONING_EFFORT", "high").strip() or "high",
+        is_reasoning_model=True,
     )
     # Keep extraction responses bounded for large historical chunks.  The
     # JSON extraction normally needs far fewer tokens than the SDK default;
@@ -268,6 +276,8 @@ def get_memory():
             judge_model,
             base_url_env="MEMORY_JUDGE_OPENAI_BASE_URL",
             api_key_env="MEMORY_JUDGE_API_KEY",
+            reasoning_effort=os.getenv("MEMORY_REASONING_EFFORT", "high").strip() or "high",
+            is_reasoning_model=True,
         )
         config["reranker"] = {
             "provider": "llm_reranker",

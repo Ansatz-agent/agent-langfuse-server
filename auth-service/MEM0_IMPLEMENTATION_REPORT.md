@@ -73,6 +73,9 @@ SQLite 中的历史数据不会被 Mem0 覆盖。每个 HistorySession 生成确
 `MEMORY_JUDGE_OPENAI_BASE_URL` / `MEMORY_JUDGE_API_KEY`。未设置角色级变量时，
 代码回退到上述默认值。
 
+LLM 与 judger 的 `reasoning_effort` 固定为 `high`，并显式按 reasoning model
+路径发送；Embedding 不涉及 reasoning 参数。
+
 这里的“judger”落到 Mem0 官方配置中的 `llm_reranker`，只在搜索候选记忆时进行相关性重排，不替代记忆提取 LLM。
 
 ### 3.5 HTTP API

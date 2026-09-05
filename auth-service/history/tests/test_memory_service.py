@@ -72,10 +72,14 @@ class MemoryServiceTests(TestCase):
                 "alternate-model",
                 base_url_env="MEMORY_LLM_OPENAI_BASE_URL",
                 api_key_env="MEMORY_LLM_API_KEY",
+                reasoning_effort="high",
+                is_reasoning_model=True,
             )
 
         self.assertEqual(config["config"]["openai_base_url"], "https://alternate.example/v1")
         self.assertEqual(config["config"]["api_key"], "alternate-key")
+        self.assertEqual(config["config"]["reasoning_effort"], "high")
+        self.assertTrue(config["config"]["is_reasoning_model"])
 
     def test_provider_config_falls_back_to_primary_for_embedding(self):
         with patch.dict(
