@@ -27,6 +27,11 @@
           <div>
             <p class="eyebrow">Memory {{ forloop.counter|stringformat:"02d" }}</p>
             <h2>{{ item.memory|default:"（无文本内容）" }}</h2>
+            {% if item.tags %}
+            <div class="memory-catalog-tags" aria-label="记忆标签">
+              {% for tag in item.tags %}<span class="tag memory-tag memory-tag-{{ tag.kind }}">{{ tag.label }} · {{ tag.value }}</span>{% endfor %}
+            </div>
+            {% endif %}
           </div>
         </div>
         <dl class="memory-catalog-meta">

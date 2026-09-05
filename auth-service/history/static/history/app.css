@@ -224,6 +224,10 @@ button.primary, .primary { background: #5e6ad2; border-color: #5e6ad2; }
 .memory-catalog-card-header { display: flex; gap: .8rem; align-items: flex-start; }
 .memory-catalog-mark { display: grid; place-items: center; flex: 0 0 auto; width: 2rem; height: 2rem; border: 1px solid rgba(113, 112, 255, .35); border-radius: .6rem; color: #b7b6ff; background: rgba(113, 112, 255, .1); }
 .memory-catalog-card h2 { margin: .18rem 0 0; color: var(--text); font-size: 1rem; font-weight: 500; line-height: 1.5; }
+.memory-catalog-tags { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .65rem; }
+.memory-tag { padding: .22rem .52rem; border-color: rgba(113, 112, 255, .24); background: rgba(113, 112, 255, .08); color: #c4c3ff; font-size: .68rem; }
+.memory-tag-time { border-color: rgba(16, 185, 129, .24); background: rgba(16, 185, 129, .07); color: #9de8c9; }
+.memory-tag-model { border-color: rgba(245, 158, 11, .24); background: rgba(245, 158, 11, .07); color: #fcd38a; }
 .memory-catalog-meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 1rem 0 0 2.8rem; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: .55rem; background: var(--border-subtle); }
 .memory-catalog-meta > div { min-width: 0; padding: .6rem .7rem; background: rgba(255, 255, 255, .018); }
 .memory-catalog-meta dt { color: var(--subtle); font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; }

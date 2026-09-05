@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 
 from django.conf import settings
@@ -414,6 +415,28 @@ def list_all_memories(*, requester) -> list[dict]:
             metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
             session = job.session if job else None
             owner = job.owner if job else identity.user
+            source = (
+                metadata.get("source")
+                or (session.source if session else "")
+                or "ansatz_history"
+            )
+            created_at = (
+                value.get("created_at")
+                or value.get("createdAt")
+                or metadata.get("created_at")
+            )
+            started_at = (
+                session.started_at
+                if session and session.started_at
+                else metadata.get("started_at") or created_at
+            )
+            tags = [{"label": "来源", "value": _memory_source_label(source), "kind": "source"}]
+            formatted_time = _format_memory_time(started_at)
+            if formatted_time:
+                tags.append({"label": "时间", "value": formatted_time, "kind": "time"})
+            model = metadata.get("model") or (session.model if session else "")
+            if model:
+                tags.append({"label": "模型", "value": model, "kind": "model"})
             rows.append(
                 {
                     "id": memory_id,
@@ -423,14 +446,39 @@ def list_all_memories(*, requester) -> list[dict]:
                         or value.get("content")
                         or ""
                     ),
-                    "created_at": value.get("created_at") or value.get("createdAt"),
+                    "created_at": created_at,
                     "user": owner.username,
                     "user_id": owner.pk,
                     "session": session,
                     "metadata": metadata,
+                    "tags": tags,
                 }
             )
     return rows
+
+
+def _memory_source_label(source) -> str:
+    labels = {
+        "ansatz_history": "会话历史",
+        "history_import": "历史导入",
+    }
+    value = str(source or "").strip()
+    return labels.get(value, value or "未知来源")
+
+
+def _format_memory_time(value) -> str:
+    if not value:
+        return ""
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d %H:%M")
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    return parsed.strftime("%Y-%m-%d %H:%M")
 
 
 def owned_memory_ids(*, user) -> set[str]:

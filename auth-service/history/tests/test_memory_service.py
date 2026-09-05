@@ -121,7 +121,19 @@ class MemoryServiceTests(TestCase):
             def get_all(self, *, filters, top_k):
                 self.filters = filters
                 self.top_k = top_k
-                return {"results": [{"id": "memory-1", "memory": "Likes apples", "metadata": {}}]}
+                return {
+                    "results": [
+                        {
+                            "id": "memory-1",
+                            "memory": "Likes apples",
+                            "metadata": {
+                                "source": "ansatz_history",
+                                "started_at": "2026-09-05T12:34:56+00:00",
+                                "model": "test-model",
+                            },
+                        }
+                    ]
+                }
 
         with patch("history.memory_service.get_memory", return_value=FakeMemory()):
             memories = list_all_memories(requester=self.user)
@@ -130,3 +142,15 @@ class MemoryServiceTests(TestCase):
         self.assertEqual(memories[0]["memory"], "Likes apples")
         self.assertEqual(memories[0]["user"], self.user.username)
         self.assertEqual(memories[0]["session"], self.session)
+        self.assertEqual(
+            memories[0]["tags"][0],
+            {"label": "来源", "value": "会话历史", "kind": "source"},
+        )
+        self.assertEqual(
+            memories[0]["tags"][1],
+            {"label": "时间", "value": "2026-09-05 12:34", "kind": "time"},
+        )
+        self.assertEqual(
+            memories[0]["tags"][2],
+            {"label": "模型", "value": "test-model", "kind": "model"},
+        )
