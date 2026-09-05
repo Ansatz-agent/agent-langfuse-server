@@ -20,6 +20,7 @@ import {
   ClipboardPen,
   Clock,
   Beaker,
+  BrainCircuit,
 } from "lucide-react";
 import { type ReactNode } from "react";
 import { type Entitlement } from "@/src/features/entitlements/constants/entitlements";
@@ -123,6 +124,14 @@ export const ROUTES: Route[] = [
     group: RouteGroup.Observability,
     section: RouteSection.Main,
     pathname: `/project/[projectId]/sessions`,
+  },
+  {
+    title: "Memories",
+    pathname: `/project/[projectId]/memories`,
+    icon: BrainCircuit,
+    productModule: "tracing",
+    group: RouteGroup.Observability,
+    section: RouteSection.Main,
   },
   {
     title: "Users",

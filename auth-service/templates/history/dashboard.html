@@ -92,13 +92,6 @@
             <span><strong>维护 Memory</strong><small>编辑 MEMORY.md / USER.md</small></span>
             <b aria-hidden="true">→</b>
           </a>
-          {% if request.user.is_superuser %}
-          <a href="{% url 'history:memory-catalog' %}">
-            <span class="quick-icon">✦</span>
-            <span><strong>抽取记忆</strong><small>查看所有记忆及来源会话</small></span>
-            <b aria-hidden="true">→</b>
-          </a>
-          {% endif %}
           <a href="{% url 'history:session-import' %}">
             <span class="quick-icon">↥</span>
             <span><strong>导入数据</strong><small>上传 JSON / JSONL 历史</small></span>

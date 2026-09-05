@@ -5,6 +5,7 @@ from . import views
 app_name = "history"
 urlpatterns = [
     path("healthz", views.healthz, name="healthz"),
+    path("internal/memory/catalog/", views.memory_catalog_internal, name="memory-catalog-internal"),
     path("dashboard/", views.dashboard, name="dashboard"),
     path("history/usage/", views.usage_dashboard, name="usage-dashboard"),
     path(
@@ -42,7 +43,6 @@ urlpatterns = [
     path("history/export/", views.session_export, name="session-export"),
     path("history/import/", views.session_import, name="session-import"),
     path("history/memory/", views.memory_pool, name="memory-pool"),
-    path("history/memories/", views.memory_catalog, name="memory-catalog"),
     path("history/api/v1/memory/search/", views.memory_search_api, name="memory-search-api"),
     path("history/api/v1/memory/", views.memory_list_api, name="memory-list-api"),
     path(

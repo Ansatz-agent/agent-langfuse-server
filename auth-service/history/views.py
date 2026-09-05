@@ -1,8 +1,10 @@
 import json
 import logging
+import secrets
 from datetime import datetime, timedelta
 from itertools import chain
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.core.paginator import Paginator
@@ -59,6 +61,52 @@ def healthz(request):
     response = JsonResponse({"status": "ok"})
     response["Cache-Control"] = "no-store"
     return response
+
+
+@require_GET
+def memory_catalog_internal(request):
+    """Serve the Langfuse UI without exposing the Mem0 database publicly."""
+    expected = getattr(settings, "MEMORY_INTERNAL_TOKEN", "")
+    supplied = request.headers.get("X-Memory-Internal-Token", "")
+    if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+        return JsonResponse({"detail": "forbidden"}, status=403)
+
+    admin = (
+        get_user_model()
+        .objects.filter(is_active=True, is_superuser=True)
+        .order_by("pk")
+        .first()
+    )
+    if admin is None:
+        return JsonResponse({"detail": "memory_catalog_unavailable"}, status=503)
+    try:
+        memories = list_all_memories(requester=admin)
+    except Exception as exc:
+        logger.exception("Internal memory catalog request failed")
+        return JsonResponse({"detail": str(exc)}, status=503)
+
+    results = []
+    for item in memories:
+        session = item.get("session")
+        results.append(
+            {
+                "id": item.get("id"),
+                "memory": item.get("memory", ""),
+                "user": item.get("user", ""),
+                "created_at": item.get("created_at"),
+                "tags": item.get("tags", []),
+                "session": (
+                    {
+                        "id": session.external_id,
+                        "title": session.title or session.external_id,
+                        "started_at": _iso(session.started_at),
+                    }
+                    if session
+                    else None
+                ),
+            }
+        )
+    return JsonResponse({"results": results})
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -585,22 +633,6 @@ def memory_pool(request):
             "user_html": render_message_markdown(pool.user_markdown),
         },
     )
-
-
-@hermes_session_required
-def memory_catalog(request):
-    if not request.user.is_superuser:
-        raise Http404
-    try:
-        memories = list_all_memories(requester=request.user)
-    except Exception as exc:
-        return render(
-            request,
-            "history/memory_catalog.html",
-            {"memories": [], "memory_error": str(exc)},
-            status=503,
-        )
-    return render(request, "history/memory_catalog.html", {"memories": memories})
 
 
 def _memory_api_error(error: Exception):

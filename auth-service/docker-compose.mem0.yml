@@ -32,6 +32,7 @@ services:
       MEMORY_MEM0_DIR: /data/mem0
       MEMORY_TELEMETRY: ${MEMORY_TELEMETRY:-0}
       MEM0_TELEMETRY: ${MEM0_TELEMETRY:-false}
+      MEMORY_INTERNAL_TOKEN: ${MEMORY_INTERNAL_TOKEN}
     depends_on:
       mem0-postgres:
         condition: service_healthy

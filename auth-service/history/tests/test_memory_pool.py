@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from history.models import (
@@ -155,9 +155,6 @@ class MemoryPoolTests(TestCase):
             mem0_memory_ids=["catalog-memory"],
             status=MemoryIngestJob.Status.SUCCEEDED,
         )
-        self.login_alice()
-        self.assertEqual(self.client.get(reverse("history:memory-catalog")).status_code, 404)
-
         self.alice.is_superuser = True
         self.alice.save(update_fields=["is_superuser"])
         with patch(
@@ -171,9 +168,13 @@ class MemoryPoolTests(TestCase):
                 }
             ],
         ):
-            response = self.client.get(reverse("history:memory-catalog"))
+            with override_settings(MEMORY_INTERNAL_TOKEN="test-memory-token"):
+                response = self.client.get(
+                    "/internal/memory/catalog/",
+                    HTTP_X_MEMORY_INTERNAL_TOKEN="test-memory-token",
+                )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Likes concise reports")
-        self.assertContains(response, "Catalog source")
-        self.assertContains(response, "memory-bob")
+        self.assertEqual(response.json()["results"][0]["memory"], "Likes concise reports")
+        self.assertEqual(response.json()["results"][0]["session"]["title"], "Catalog source")
+        self.assertEqual(self.client.get("/history/memories/").status_code, 404)
