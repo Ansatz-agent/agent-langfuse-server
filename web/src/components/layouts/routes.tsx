@@ -103,6 +103,12 @@ export const ROUTES: Route[] = [
     section: RouteSection.Main,
   },
   {
+    title: "Memories",
+    pathname: `/project/[projectId]/memories`,
+    icon: BrainCircuit,
+    section: RouteSection.Main,
+  },
+  {
     title: "Dashboards",
     pathname: `/project/[projectId]/dashboards`,
     icon: LayoutDashboard,
@@ -124,14 +130,6 @@ export const ROUTES: Route[] = [
     group: RouteGroup.Observability,
     section: RouteSection.Main,
     pathname: `/project/[projectId]/sessions`,
-  },
-  {
-    title: "Memories",
-    pathname: `/project/[projectId]/memories`,
-    icon: BrainCircuit,
-    productModule: "tracing",
-    group: RouteGroup.Observability,
-    section: RouteSection.Main,
   },
   {
     title: "Users",
