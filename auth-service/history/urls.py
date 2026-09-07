@@ -5,6 +5,7 @@ from . import views
 app_name = "history"
 urlpatterns = [
     path("healthz", views.healthz, name="healthz"),
+    path("internal/memory/catalog/", views.memory_catalog_internal, name="memory-catalog-internal"),
     path("dashboard/", views.dashboard, name="dashboard"),
     path("history/usage/", views.usage_dashboard, name="usage-dashboard"),
     path(

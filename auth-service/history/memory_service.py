@@ -5,13 +5,14 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 
 from django.conf import settings
 
 from .client_sessions import account_identity_for_user
 from .importer import redact_text
-from .models import HistoryMessage, HistorySession, MemoryIngestJob
+from .models import AccountIdentity, HistoryMessage, HistorySession, MemoryIngestJob
 from .presentation import is_hermes_context_artifact, is_hermes_control_event
 
 logger = logging.getLogger(__name__)
@@ -176,18 +177,35 @@ def enqueue_session_memory_jobs(session: HistorySession) -> int:
     return created
 
 
-def _provider_config(provider: str, model: str) -> dict:
+def _provider_config(
+    provider: str,
+    model: str,
+    *,
+    base_url_env: str = "MEMORY_OPENAI_BASE_URL",
+    api_key_env: str = "MEMORY_PROVIDER_API_KEY",
+    reasoning_effort: str | None = None,
+    is_reasoning_model: bool | None = None,
+) -> dict:
     config = {"model": model}
     if provider == "ollama":
         config["ollama_base_url"] = getattr(settings, "MEMORY_OLLAMA_BASE_URL", "http://ollama:11434")
     else:
-        api_key = os.getenv("MEMORY_PROVIDER_API_KEY", "").strip()
+        api_key = os.getenv(api_key_env, "").strip()
+        if not api_key and api_key_env != "MEMORY_PROVIDER_API_KEY":
+            api_key = os.getenv("MEMORY_PROVIDER_API_KEY", "").strip()
         if api_key:
             config["api_key"] = api_key
         if provider == "openai":
-            config["openai_base_url"] = getattr(
+            base_url = os.getenv(base_url_env, "").strip()
+            if not base_url and base_url_env != "MEMORY_OPENAI_BASE_URL":
+                base_url = os.getenv("MEMORY_OPENAI_BASE_URL", "").strip()
+            config["openai_base_url"] = base_url or getattr(
                 settings, "MEMORY_OPENAI_BASE_URL", "https://api.openai.com/v1"
             )
+            if reasoning_effort:
+                config["reasoning_effort"] = reasoning_effort
+            if is_reasoning_model is not None:
+                config["is_reasoning_model"] = is_reasoning_model
     return {"provider": provider, "config": config}
 
 
@@ -219,6 +237,10 @@ def get_memory():
     llm_config = _provider_config(
         os.getenv("MEMORY_LLM_PROVIDER", "ollama").strip(),
         os.getenv("MEMORY_LLM_MODEL", "llama3.1:8b").strip(),
+        base_url_env="MEMORY_LLM_OPENAI_BASE_URL",
+        api_key_env="MEMORY_LLM_API_KEY",
+        reasoning_effort=os.getenv("MEMORY_REASONING_EFFORT", "high").strip() or "high",
+        is_reasoning_model=True,
     )
     # Keep extraction responses bounded for large historical chunks.  The
     # JSON extraction normally needs far fewer tokens than the SDK default;
@@ -241,6 +263,8 @@ def get_memory():
         "embedder": _provider_config(
             os.getenv("MEMORY_EMBEDDER_PROVIDER", "ollama").strip(),
             os.getenv("MEMORY_EMBEDDER_MODEL", "nomic-embed-text").strip(),
+            base_url_env="MEMORY_EMBEDDER_OPENAI_BASE_URL",
+            api_key_env="MEMORY_EMBEDDER_API_KEY",
         ),
     }
     if getattr(settings, "MEMORY_RERANK_ENABLED", False):
@@ -248,7 +272,14 @@ def get_memory():
         if not judge_model:
             raise MemoryUnavailable("memory_judge_model_not_configured")
         judge_provider = os.getenv("MEMORY_JUDGE_PROVIDER", "openai").strip()
-        judge_llm = _provider_config(judge_provider, judge_model)
+        judge_llm = _provider_config(
+            judge_provider,
+            judge_model,
+            base_url_env="MEMORY_JUDGE_OPENAI_BASE_URL",
+            api_key_env="MEMORY_JUDGE_API_KEY",
+            reasoning_effort=os.getenv("MEMORY_REASONING_EFFORT", "high").strip() or "high",
+            is_reasoning_model=True,
+        )
         config["reranker"] = {
             "provider": "llm_reranker",
             "config": {
@@ -343,6 +374,111 @@ def search_memories(*, user, query: str, limit: int = 5):
 def list_memories(*, user):
     result = get_memory().get_all(filters={"user_id": account_memory_id(user)})
     return result.get("results", result.get("memories", [])) if isinstance(result, dict) else result
+
+
+def list_all_memories(*, requester) -> list[dict]:
+    """Return every extracted memory with its local session and owner context."""
+    if not getattr(requester, "is_superuser", False):
+        raise MemoryNotFound("memory_not_found")
+
+    memory = get_memory()
+    identities = AccountIdentity.objects.select_related("user").all()
+    jobs = list(
+        MemoryIngestJob.objects.filter(mem0_memory_ids__isnull=False)
+        .select_related("owner", "session")
+        .order_by("created_at", "id")
+    )
+    by_memory_id: dict[str, MemoryIngestJob] = {}
+    for job in jobs:
+        if isinstance(job.mem0_memory_ids, list):
+            for memory_id in job.mem0_memory_ids:
+                if isinstance(memory_id, str) and memory_id:
+                    by_memory_id.setdefault(memory_id, job)
+
+    rows: list[dict] = []
+    for identity in identities:
+        result = memory.get_all(filters={"user_id": str(identity.account_id)}, top_k=1000)
+        values = (
+            result.get("results", result.get("memories", []))
+            if isinstance(result, dict)
+            else result
+        )
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            memory_id = value.get("id") or value.get("memory_id")
+            if not isinstance(memory_id, str) or not memory_id:
+                continue
+            job = by_memory_id.get(memory_id)
+            metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+            session = job.session if job else None
+            owner = job.owner if job else identity.user
+            source = (
+                metadata.get("source")
+                or (session.source if session else "")
+                or "ansatz_history"
+            )
+            created_at = (
+                value.get("created_at")
+                or value.get("createdAt")
+                or metadata.get("created_at")
+            )
+            started_at = (
+                session.started_at
+                if session and session.started_at
+                else metadata.get("started_at") or created_at
+            )
+            tags = [{"label": "来源", "value": _memory_source_label(source), "kind": "source"}]
+            formatted_time = _format_memory_time(started_at)
+            if formatted_time:
+                tags.append({"label": "时间", "value": formatted_time, "kind": "time"})
+            model = metadata.get("model") or (session.model if session else "")
+            if model:
+                tags.append({"label": "模型", "value": model, "kind": "model"})
+            rows.append(
+                {
+                    "id": memory_id,
+                    "memory": (
+                        value.get("memory")
+                        or value.get("text")
+                        or value.get("content")
+                        or ""
+                    ),
+                    "created_at": created_at,
+                    "user": owner.username,
+                    "user_id": owner.pk,
+                    "session": session,
+                    "metadata": metadata,
+                    "tags": tags,
+                }
+            )
+    return rows
+
+
+def _memory_source_label(source) -> str:
+    labels = {
+        "ansatz_history": "会话历史",
+        "history_import": "历史导入",
+    }
+    value = str(source or "").strip()
+    return labels.get(value, value or "未知来源")
+
+
+def _format_memory_time(value) -> str:
+    if not value:
+        return ""
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d %H:%M")
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    return parsed.strftime("%Y-%m-%d %H:%M")
 
 
 def owned_memory_ids(*, user) -> set[str]:

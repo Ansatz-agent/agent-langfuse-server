@@ -118,6 +118,8 @@ services:
       # In-app agent settings.
       LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_USER: ${LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_USER:-}
       LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_ORG: ${LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_ORG:-}
+      MEMORY_CATALOG_API_URL: ${MEMORY_CATALOG_API_URL:-http://auth-service:8000/internal/memory/catalog/}
+      MEMORY_CATALOG_TOKEN: ${MEMORY_CATALOG_TOKEN:-}
 
   clickhouse:
     image: docker.io/clickhouse/clickhouse-server:25.12
